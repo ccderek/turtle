@@ -22,3 +22,8 @@ export function contextPrefix(history: { summary: string; status: string }[]): s
   const lines = history.map((h) => `- [${h.status}] ${h.summary.split("\n")[0]}`);
   return `Earlier work on this branch (newest first):\n${lines.join("\n")}\n\n`;
 }
+
+/** Prefix for a forked conversation whose working directory changed (none sandbox). */
+export function workspaceMovedNote(workspace: string): string {
+  return `[turtle] This conversation was forked into a new working directory: ${workspace}. Earlier paths in this conversation refer to another copy; only read and write files under the new directory.\n\n`;
+}

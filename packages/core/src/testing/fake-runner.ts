@@ -144,7 +144,12 @@ export class FakeAgent {
   async tool(
     name: string,
     input: Record<string, unknown>,
-    opts: { effect?: () => Promise<void>; response?: unknown; agentId?: string } = {},
+    opts: {
+      effect?: () => Promise<void>;
+      response?: unknown;
+      agentId?: string;
+      failed?: boolean;
+    } = {},
   ): Promise<string> {
     this.check();
     const toolUseId = `toolu_${randomUUID().slice(0, 8)}`;
@@ -158,6 +163,7 @@ export class FakeAgent {
       toolResponse: opts.response ?? "ok",
     };
     if (opts.agentId) (req as { agentId?: string }).agentId = opts.agentId;
+    if (opts.failed) (req as { failed?: boolean }).failed = true;
     await this.request(req);
     this.sdk({
       type: "user",
@@ -184,7 +190,8 @@ export class FakeAgent {
     const toolUseId = `toolu_${randomUUID().slice(0, 8)}`;
     const input = artifacts ? { summary, status, artifacts } : { summary, status };
     this.assistant([{ type: "tool_use", id: toolUseId, name: "mcp__turtle__checkpoint", input }]);
-    const reply = await this.request<CheckpointReply>({ kind: "checkpoint", toolUseId, ...input });
+    // Like runner-claude, the request does not carry the tool_use id; the orchestrator matches it.
+    const reply = await this.request<CheckpointReply>({ kind: "checkpoint", ...input });
     await this.request({
       kind: "post_tool_use",
       toolName: "mcp__turtle__checkpoint",

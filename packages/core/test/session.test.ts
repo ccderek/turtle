@@ -239,11 +239,15 @@ describe("RunSession: rules", () => {
       await a.tool(
         "Bash",
         { command: "npm test" },
-        { response: { exitCode: 1, stdout: "1 failed" } },
+        { response: "Exit code 1\n1 failed", failed: true },
       );
       await a.checkpoint("Reproduce the bug");
       await a.edit("fix.txt", "fix\n");
-      await a.tool("Bash", { command: "npm test -- --run" }, { response: { exitCode: 0 } });
+      await a.tool(
+        "Bash",
+        { command: "npm test -- --run" },
+        { response: { stdout: "3 passed", stderr: "", interrupted: false } },
+      );
       await a.finish("Fixed.");
     });
     const semantic = e.db.listNodes({ branchId: session.branchId, kinds: ["semantic"] });
@@ -332,6 +336,9 @@ describe("RunSession: continue and fork", () => {
       resumeSessionAt: stepOne?.resumeMessageUuid,
       forkSession: true,
     });
+    expect(fork.agent.prompt).toMatch(
+      /^\[turtle\] This conversation was forked into a new working directory: .+\n\nTry another way$/,
+    );
     expect(existsSync(join(fork.session.workspace, "one.txt"))).toBe(true);
     expect(existsSync(join(fork.session.workspace, "two.txt"))).toBe(false);
     const forkBranch = e.db.getBranch(fork.session.branchId);
@@ -471,3 +478,23 @@ async function writeDirty(repo: string) {
   const { writeFile } = await import("node:fs/promises");
   await writeFile(join(repo, "notes.txt"), "uncommitted\n");
 }
+
+describe("detectTestResult", () => {
+  it("reads failed calls, explicit codes and output", async () => {
+    const { detectTestResult } = await import("../src/run/rules.js");
+    const bash = (command: string) => ({ command });
+    expect(detectTestResult("npm test", "Bash", bash("ls"), "")).toBeNull();
+    expect(detectTestResult(undefined, "Bash", bash("npm test"), "")).toBeNull();
+    expect(detectTestResult("npm test", "Bash", bash("npm test"), "Error", true)).toBe("fail");
+    expect(detectTestResult("npm test", "Bash", bash("npm test"), { exitCode: 2 })).toBe("fail");
+    expect(
+      detectTestResult("npm test", "Bash", bash("npm test"), { stdout: "Tests: 1 failed" }),
+    ).toBe("fail");
+    expect(
+      detectTestResult("npm test", "Bash", bash("npm test"), { stdout: "ok", interrupted: true }),
+    ).toBeNull();
+    expect(
+      detectTestResult("npm test", "Bash", bash("npm test -- x"), { stdout: "all good" }),
+    ).toBe("pass");
+  });
+});

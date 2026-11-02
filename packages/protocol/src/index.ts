@@ -50,6 +50,8 @@ export interface PostToolUseRequest {
   toolUseId: string;
   toolInput: unknown;
   toolResponse: unknown;
+  /** True when the tool call failed (PostToolUseFailure); toolResponse holds the error. */
+  failed?: boolean;
   /** Set when the tool call came from a subagent. */
   agentId?: string;
 }

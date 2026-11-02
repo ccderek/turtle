@@ -8,6 +8,7 @@ export * from "./git/store.js";
 export * from "./ids.js";
 export * from "./run/prompt.js";
 export * from "./run/rules.js";
+export * from "./run/sandbox.js";
 export * from "./run/session.js";
 export * from "./run/summarizer.js";
 export * from "./run/transport.js";

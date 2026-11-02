@@ -1,2 +1,10 @@
-/** Claude Agent SDK runner (implemented in milestone M4). */
-export const ADAPTER_ID = "claude-agent-sdk";
+export {
+  ADAPTER_ID,
+  ClaudeRunner,
+  defaultExec,
+  ensureSessionInProject,
+  projectDirName,
+  RUNNER_VERSION,
+  type RunnerDeps,
+  sanitizeEnv,
+} from "./runner.js";

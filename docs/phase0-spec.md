@@ -419,7 +419,7 @@ The workspace has no `.git`, so these tools replace `git diff` / `git log` for t
 
 ### 9.3 Hooks
 
-- **PostToolUse** (all tools): sends `post_tool_use` and waits for the reply. The orchestrator skips the snapshot for read-only tools (`Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`, `mcp__turtle__*`) and only counts them.
+- **PostToolUse** and **PostToolUseFailure** (all tools): send `post_tool_use` (with `failed: true` for the latter) and wait for the reply. Failed calls can still change files. The orchestrator skips the snapshot for read-only tools (`Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`, `mcp__turtle__*`) and only counts them.
 - **Stop**: sends `stop`. The orchestrator writes a final semantic checkpoint (`trigger: stop`) if files changed since the last semantic node or the agent never declared one, then shuts the runner down.
 
 ### 9.4 System prompt append (draft)
@@ -453,10 +453,13 @@ You are working inside turtle, which records your work as a tree of checkpoints.
 - The hook fires before the result is appended to the transcript, so the uuid is not known yet. The orchestrator fills `resume_message_uuid` when the SDK emits the user message that carries that `tool_result`. If the assistant turn made several parallel tool calls, the cut goes after the last of their results.
 - A fork then appends the human's new message after that point. Cutting only removes a suffix and never edits the kept prefix, so prompt-cache hits and thinking blocks in the prefix stay valid.
 
-**VERIFY** (milestone M4):
+**Verified in M4** (real run, `scripts/e2e-real.mjs`):
 
-- `resumeSessionAt` accepts the uuid of a user (tool-result) message, and how the SDK emits results of parallel tool calls (one user message or several).
-- Session lookup depends on `cwd`. Docker mode always uses `/workspace` with a shared `CLAUDE_CONFIG_DIR`, so lookups match. In `none` mode, workspaces have different paths, so turtle copies the session file into the target project directory before resuming.
+- `resumeSessionAt` accepts the uuid of the tool-result user message; the SDK docs confirm it accepts any chain-entry uuid and ask callers to fork at the kept turn's last entry, which is this rule.
+- A fork resumes the conversation up to the checkpoint and nothing after it (the forked agent remembers earlier files but not later ones).
+- Still open: how results of parallel tool calls are emitted (one user message or several); the orchestrator handles both by waiting for every result of the turn.
+- Session lookup depends on `cwd`. Docker mode always uses `/workspace` with a shared `CLAUDE_CONFIG_DIR`, so lookups match. In `none` mode, workspaces have different paths, so the runner copies the session file into the target project directory before resuming (verified: the directory name is the cwd with every non-alphanumeric character replaced by `-`).
+- In `none` mode the resumed conversation still mentions the old workspace's absolute paths, so the fork prompt starts with a note naming the new directory. Docker mode avoids this because the path is always `/workspace`.
 
 ---
 
@@ -519,7 +522,7 @@ Every field is optional. Prices are in USD per million tokens and are used only 
 
 **Rules** (counted since the last semantic node): `maxToolCalls`, `maxMinutes`, `maxChangedLines` (sum of numstat), `maxChangedFiles`, `testFlip`.
 
-**Test status.** When `tests.command` is set and a `Bash` call's command contains it, turtle reads the result from `tool_response`. **VERIFY**: whether the Bash `tool_response` exposes an exit code; if not, parse the output for common runner summaries, or rely on `runAtCheckpoint`. With `runAtCheckpoint: true`, the orchestrator sends `exec` to the runner at each semantic checkpoint. A pass↔fail change fires `testFlip`.
+**Test status.** When `tests.command` is set and a `Bash` call's command contains it, turtle derives the result. The Bash `tool_response` has no exit code (verified in the SDK types); a non-zero exit arrives as a failed tool call through the `PostToolUseFailure` hook, which the runner forwards with `failed: true`. So: failed call → fail; otherwise a failure summary in the output → fail; else pass. `runAtCheckpoint` remains the exact alternative. With `runAtCheckpoint: true`, the orchestrator sends `exec` to the runner at each semantic checkpoint. A pass↔fail change fires `testFlip`.
 
 **Summarizer.** Uses `@anthropic-ai/sdk` `messages.create` with `summarizerModel`. Input: the branch intent, diffstat, unified diff truncated to 20k chars, tool calls since the last semantic node (name + short input), and the last assistant text. Output: a title under 72 characters plus at most 5 bullet lines. The summarizer never sees thinking blocks.
 
@@ -603,7 +606,8 @@ Step 3 is the real test: Phase 0 passes only if reading the tree is clearly bett
 | Ignored files across forks | `node_modules`, build outputs are rebuilt via `setupCommand`; secrets via `copyIgnored` |
 | Claude subagents (Task tool) | Run in the same workspace; recorded as events on the same branch, not as turtle branches |
 | No mid-run human input | `need_decision` / `blocked` end the run; Phase 2 adds inject |
-| Session file coupling | Relies on `CLAUDE_CONFIG_DIR` and cwd-based session lookup (VERIFY, §10) |
+| Session file coupling | Relies on `CLAUDE_CONFIG_DIR` and cwd-based session lookup (§10, verified) |
+| Running turtle inside Claude Code | The runner strips the enclosing session's variables (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, ingress/messaging tokens, …) so the agent does not join that session; credentials and provider settings are kept |
 | Concurrency | Multiple `turtle run` processes, no daemon; Phase 1 adds the daemon |
 | Decided: root snapshot | Includes uncommitted changes by default; `--from-head` opts out |
 | Decided: package manager | pnpm for development only; users install one npm package |

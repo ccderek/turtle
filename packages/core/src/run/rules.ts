@@ -55,13 +55,16 @@ export function isMutatingTool(toolName: string): boolean {
 
 /**
  * Best-effort test result from a Bash tool call that ran the configured test command.
- * Returns null when the result cannot be determined (VERIFY: Bash tool_response shape).
+ * Claude Code reports a non-zero exit as a failed tool call (PostToolUseFailure) and its
+ * Bash output has no exit code, so: failed call → "fail"; otherwise the output decides,
+ * defaulting to "pass". Returns null for unrelated calls.
  */
 export function detectTestResult(
   testCommand: string | undefined,
   toolName: string,
   toolInput: unknown,
   toolResponse: unknown,
+  failed = false,
 ): TestStatus | null {
   if (!testCommand || toolName !== "Bash") return null;
   const command = (toolInput as { command?: unknown } | null)?.command;
@@ -69,11 +72,12 @@ export function detectTestResult(
 
   if (toolResponse && typeof toolResponse === "object") {
     const r = toolResponse as Record<string, unknown>;
+    if (r.interrupted === true) return null;
     for (const key of ["exitCode", "exit_code", "returnCode", "return_code", "code"]) {
       if (typeof r[key] === "number") return r[key] === 0 ? "pass" : "fail";
     }
-    if (r.interrupted === true) return null;
   }
+  if (failed) return "fail";
   const text =
     typeof toolResponse === "string"
       ? toolResponse
@@ -82,8 +86,8 @@ export function detectTestResult(
             .filter((v): v is string => typeof v === "string")
             .join("\n")
         : "";
-  if (/\b(\d+ (failed|failing)|FAIL\b|failures?:\s*[1-9]|Tests?:.*\bfailed\b)/.test(text))
+  if (/\b(\d+ (failed|failing)|FAIL\b|failures?:\s*[1-9]|Tests?:.*\bfailed\b)/.test(text)) {
     return "fail";
-  if (/\b(\d+ passed|passing|Tests?:.*\bpassed\b|OK\b|All tests passed)/i.test(text)) return "pass";
-  return null;
+  }
+  return "pass";
 }

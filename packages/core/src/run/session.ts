@@ -30,7 +30,12 @@ import type {
 import type { Trailers } from "../git/message.js";
 import { AGENT_IDENTITY, BRANCH_REF_PREFIX, type GitStore } from "../git/store.js";
 import { newId } from "../ids.js";
-import { checkpointReplyMessage, contextPrefix, TURTLE_SYSTEM_PROMPT } from "./prompt.js";
+import {
+  checkpointReplyMessage,
+  contextPrefix,
+  TURTLE_SYSTEM_PROMPT,
+  workspaceMovedNote,
+} from "./prompt.js";
 import { detectTestResult, evaluateRules, isMutatingTool } from "./rules.js";
 import { type Summarizer, type Summary, type SummaryInput, truncate } from "./summarizer.js";
 import type { RunnerLauncher, RunnerTransport } from "./transport.js";
@@ -175,6 +180,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private readonly toolResultsSeen = new Set<string>();
   /** tool_use id → uuid of the message that completed its group. */
   private readonly resumeUuidByTool = new Map<string, string>();
+  /** Checkpoint tool calls seen in assistant messages but not yet answered: id → summary. */
+  private readonly pendingCheckpointTools = new Map<string, string>();
 
   private constructor(
     private readonly deps: RunDeps,
@@ -308,6 +315,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
             resumeSessionAt: from.resumeMessageUuid,
             forkSession: true,
           };
+          // The resumed conversation may mention the old workspace's absolute paths.
+          if (sandbox === "none") promptPrefix = workspaceMovedNote(workspace);
         }
       }
       if (!resume.resume && from.kind !== "root") {
@@ -444,6 +453,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private onSdk(m: SdkMessage): void {
     const { db } = this.deps;
     if (!m || typeof m !== "object") return;
+    if (!isPersistedMessage(m)) return;
     db.appendMessage(this.agentId, {
       sessionId: m.session_id ?? null,
       uuid: m.uuid ?? null,
@@ -472,6 +482,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
             }
             group.add(block.id);
             this.groupOfTool.set(block.id, apiId);
+          }
+          if (block.name === "mcp__turtle__checkpoint") {
+            this.pendingCheckpointTools.set(block.id, String(block.input?.summary ?? ""));
           }
           this.emit("event", {
             type: "tool",
@@ -563,6 +576,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       req.toolName,
       req.toolInput,
       req.toolResponse,
+      req.failed ?? false,
     );
     if (tests) {
       this.testsNow = tests;
@@ -600,6 +614,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
 
   private async onCheckpoint(req: CheckpointRequest): Promise<CheckpointReply> {
     const { db, store } = this.deps;
+    const toolUseId = req.toolUseId ?? this.matchCheckpointTool(req.summary);
     await this.runTestsIfConfigured();
     const [title = "", ...rest] = req.summary.trim().split("\n");
     const node = await this.createNode({
@@ -610,7 +625,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       status: req.status,
       trigger: "declared",
       allowUnchanged: true,
-      resumeToolUseId: req.toolUseId ?? null,
+      resumeToolUseId: toolUseId,
     });
     if (!node) throw new Error("checkpoint was not recorded");
     for (const a of req.artifacts ?? []) {
@@ -635,6 +650,17 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       }
     }
     return { nodeId: node.id, message: checkpointReplyMessage(node.id.slice(0, 6), req.status) };
+  }
+
+  /**
+   * The MCP tool handler does not learn its tool_use id, so match the request to the
+   * newest unanswered checkpoint tool call with the same summary.
+   */
+  private matchCheckpointTool(summary: string): string | null {
+    const ids = [...this.pendingCheckpointTools.keys()].reverse();
+    const id = ids.find((k) => this.pendingCheckpointTools.get(k) === summary) ?? ids[0] ?? null;
+    if (id) this.pendingCheckpointTools.delete(id);
+    return id;
   }
 
   private async onDiff(since: string | undefined, path: string | undefined): Promise<DiffReply> {
@@ -996,6 +1022,15 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Only conversation messages are stored; streaming deltas, status and rate-limit
+ * notices are ephemeral and would bloat the DB.
+ */
+function isPersistedMessage(m: SdkMessage): boolean {
+  if (m.type === "assistant" || m.type === "user" || m.type === "result") return true;
+  return m.type === "system" && (m.subtype === "init" || m.subtype === "compact_boundary");
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: SDK content blocks are untyped JSON.
