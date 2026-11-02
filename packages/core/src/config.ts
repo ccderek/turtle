@@ -26,7 +26,12 @@ export interface TurtleConfig {
     maxBudgetUsd?: number;
     allowedTools: string[];
   };
-  sandbox: { mode: SandboxMode; image: string };
+  /**
+   * dockerArgs: extra `docker run` arguments, e.g. ["--network", "host"].
+   * forwardEnv: extra host variable names passed into the container (credentials beyond
+   * the built-in list, proxy settings, …).
+   */
+  sandbox: { mode: SandboxMode; image: string; dockerArgs?: string[]; forwardEnv?: string[] };
   workspace: { copyIgnored: string[]; setupCommand?: string };
   checkpoint: { summarizerModel: string; rules: RulesConfig };
   tests: { command?: string; runAtCheckpoint: boolean; timeoutSec: number };

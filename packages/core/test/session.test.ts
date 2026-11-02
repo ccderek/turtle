@@ -500,3 +500,33 @@ describe("detectTestResult", () => {
     ).toBe("pass");
   });
 });
+
+describe("dockerRunArgs", () => {
+  it("mounts the workspace and config dir, runs as the host user and passes credentials by name", async () => {
+    const { dockerRunArgs } = await import("../src/run/docker.js");
+    const args = dockerRunArgs(
+      { image: "img:1", extraArgs: ["--network", "host"], forwardEnv: ["MY_TOKEN"] },
+      {
+        agentId: "a1",
+        workspace: "/ws/b1",
+        claudeConfigDir: "/repo/.git/turtle/claude",
+        env: { X: "1" },
+      },
+      {
+        uid: 501,
+        gid: 20,
+        env: { ANTHROPIC_API_KEY: "secret", MY_TOKEN: "t", NODE_EXTRA_CA_CERTS: "/ca.pem" },
+      },
+    );
+    const joined = args.join(" ");
+    expect(args.slice(0, 5)).toEqual(["run", "--rm", "-i", "--name", "turtle-a1"]);
+    expect(joined).toContain("--user 501:20");
+    expect(joined).toContain("-v /ws/b1:/workspace");
+    expect(joined).toContain("-v /repo/.git/turtle/claude:/turtle/claude");
+    expect(joined).toContain("-e ANTHROPIC_API_KEY -e MY_TOKEN");
+    expect(joined).not.toContain("secret");
+    expect(joined).toContain("-v /ca.pem:/turtle/ca.crt:ro -e NODE_EXTRA_CA_CERTS=/turtle/ca.crt");
+    expect(args.slice(-4)).toEqual(["--network", "host", "img:1", "turtle-runner"]);
+    expect(joined).not.toContain(".git:");
+  });
+});

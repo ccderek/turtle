@@ -24,12 +24,17 @@ export const FORWARDED_ENV = [
   "NO_PROXY",
 ];
 
+/** uid/gid used inside the container when turtle itself runs as root (the image's "node" user). */
+export const ROOT_FALLBACK_ID = 1000;
+
 export interface DockerOptions {
   image: string;
   /** Docker CLI binary (default "docker"). */
   docker?: string;
   /** Extra `docker run` arguments (e.g. ["--network", "none"]). */
   extraArgs?: string[];
+  /** Additional host environment variable names to pass into the container. */
+  forwardEnv?: string[];
 }
 
 /** Arguments for `docker run`, exported for tests (docs/phase0-spec.md §11). */
@@ -62,10 +67,13 @@ export function dockerRunArgs(
     "-e",
     "HOME=/tmp/home",
   ];
-  for (const name of FORWARDED_ENV) {
+  for (const name of [...FORWARDED_ENV, ...(o.forwardEnv ?? [])]) {
     // Pass by name so values never appear in the process list.
     if (host.env[name] !== undefined) args.push("-e", name);
   }
+  // A host CA bundle for TLS-inspecting proxies is mounted read-only.
+  const ca = host.env.NODE_EXTRA_CA_CERTS;
+  if (ca) args.push("-v", `${ca}:/turtle/ca.crt:ro`, "-e", "NODE_EXTRA_CA_CERTS=/turtle/ca.crt");
   for (const [k, v] of Object.entries(spec.env)) args.push("-e", `${k}=${v}`);
   args.push(...(o.extraArgs ?? []), o.image, "turtle-runner");
   return args;
@@ -87,8 +95,15 @@ export function dockerLauncher(o: DockerOptions): RunnerLauncher {
       );
     }
     await mkdir(spec.claudeConfigDir, { recursive: true });
-    const uid = process.getuid?.() ?? 1000;
-    const gid = process.getgid?.() ?? 1000;
+    let uid = process.getuid?.() ?? 1000;
+    let gid = process.getgid?.() ?? 1000;
+    if (uid === 0) {
+      // Claude Code refuses to skip permission prompts as root, so a root host runs the
+      // container as the image's unprivileged user and hands it the mounted directories.
+      uid = ROOT_FALLBACK_ID;
+      gid = ROOT_FALLBACK_ID;
+      await execFileAsync("chown", ["-R", `${uid}:${gid}`, spec.workspace, spec.claudeConfigDir]);
+    }
     const transport = await childProcessTransport(
       docker,
       dockerRunArgs(o, spec, { uid, gid, env: process.env }),

@@ -35,7 +35,11 @@ export function runnerMainPath(): string {
 
 export function launcherFor(mode: SandboxMode, config: TurtleConfig): RunnerLauncher {
   if (mode === "none") return noneLauncher([process.execPath, runnerMainPath()]);
-  return dockerLauncher({ image: config.sandbox.image });
+  return dockerLauncher({
+    image: config.sandbox.image,
+    extraArgs: config.sandbox.dockerArgs ?? [],
+    forwardEnv: config.sandbox.forwardEnv ?? [],
+  });
 }
 
 export function summarizerFor(config: TurtleConfig, warn: (msg: string) => void): Summarizer {

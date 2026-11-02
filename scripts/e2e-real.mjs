@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_CONFIG,
+  dockerLauncher,
   GitStore,
   git,
   HeuristicSummarizer,
@@ -17,6 +18,7 @@ import {
 } from "../packages/core/dist/index.js";
 
 const model = process.argv[2] ?? "claude-haiku-5-5";
+const sandbox = process.argv[3] ?? "none";
 const runnerMain = fileURLToPath(
   new URL("../packages/runner-claude/dist/main.js", import.meta.url),
 );
@@ -31,7 +33,7 @@ await git(["-c", "user.name=e2e", "-c", "user.email=e2e@x", "commit", "-q", "-m"
 const store = await GitStore.open(repo);
 const db = TurtleDb.open(join(store.turtleDir, "turtle.db"));
 const config = mergeConfig(structuredClone(DEFAULT_CONFIG), {
-  sandbox: { mode: "none" },
+  sandbox: { mode: sandbox, dockerArgs: ["--network", "host"] },
   agent: { model, maxTurns: 15, maxBudgetUsd: 1 },
 });
 const deps = {
@@ -40,7 +42,14 @@ const deps = {
   config,
   summarizer: new HeuristicSummarizer(),
   workspaceRoot: `${repo}-ws`,
-  launcher: noneLauncher([process.execPath, runnerMain]),
+  launcher:
+    sandbox === "docker"
+      ? dockerLauncher({
+          image: "turtle/runner-claude:0.1",
+          extraArgs: ["--network", "host"],
+          forwardEnv: (process.env.TURTLE_E2E_FORWARD_ENV ?? "").split(",").filter(Boolean),
+        })
+      : noneLauncher([process.execPath, runnerMain]),
   onEvent: (e) => {
     if (e.type === "node" && e.node.kind !== "micro")
       console.log(

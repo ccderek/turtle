@@ -1,6 +1,6 @@
 # turtle — Phase 0 Spec: Record
 
-> Status: draft for review. Parent document: [architecture.md](./architecture.md).
+> Status: implemented (M0–M7); M8 (dogfooding against the exit criteria) is next. Parent document: [architecture.md](./architecture.md).
 > Items marked **VERIFY** are assumptions about external tools to confirm during implementation.
 
 ---
@@ -470,8 +470,10 @@ You are working inside turtle, which records your work as a tree of checkpoints.
 | `docker` (default) | `docker run --rm -i --name turtle-<agentId> --user <uid>:<gid> -v <ws>:/workspace -v <turtle>/claude:/turtle/claude -e CLAUDE_CONFIG_DIR=/turtle/claude -e HOME=/tmp/home -e ANTHROPIC_API_KEY -w /workspace <image> turtle-runner` | `bypassPermissions` | Normal runs |
 | `none` | Child process on the host, `cwd = <ws>` | `acceptEdits` + `allowedTools` from config | Development / no Docker. Less isolated |
 
-- `--user <uid>:<gid>` keeps workspace files owned by the host user.
-- The base image `docker/runner-claude.Dockerfile` is `node:24-bookworm-slim` plus git, ripgrep and the runner build. Projects extend it for their toolchains and set `sandbox.image`.
+- `--user <uid>:<gid>` keeps workspace files owned by the host user. When turtle itself runs as root, Claude Code refuses to skip permission prompts, so the container runs as uid/gid 1000 and turtle hands it the workspace and config directories (`chown`).
+- `sandbox.dockerArgs` adds `docker run` arguments (e.g. `--network host`); `sandbox.forwardEnv` names extra host variables to pass in. Credentials are always passed by name, never by value, so they do not appear in the process list. A host `NODE_EXTRA_CA_CERTS` bundle is mounted read-only for TLS-inspecting proxies.
+- Verified by `pnpm docker:smoke`: protocol handshake, `/workspace` mount without `.git`, non-root user, files written in the container reach the host.
+- The base image `docker/runner-claude.Dockerfile` is `node:24-bookworm-slim` plus the runner; npm installs the SDK inside the image so the native Claude Code binary matches the container's platform. No apt packages are needed (Claude Code ships its own ripgrep). Projects extend it for their toolchains and set `sandbox.image`. `pnpm docker:build` stages the build and passes host proxy/CA settings through.
 - The network stays enabled (the agent needs the API). Egress control is out of scope for Phase 0.
 - Credentials are passed only as environment variables from the host, never baked into images.
 - **Kill**: first Ctrl-C → `interrupt`, final node `status: killed`; second Ctrl-C or 10 s timeout → `docker kill` / `SIGKILL`.
