@@ -151,8 +151,8 @@ interface Event {              // like jj's operation log; append-only
         │ Adapter interface              │
 ┌───────▼──────────────────┐   ┌────────▼─────────────────┐
 │ Agent Runtime             │   │ Storage                  │
-│ 1 container + 1 git       │   │ git object store         │
-│   worktree per agent      │   │   refs/turtle/*          │
+│ 1 container + 1 workspace │   │ git object store         │
+│   dir per agent           │   │   refs/turtle/*          │
 │ Claude Agent SDK (L2)     │   │ SQLite: nodes / events   │
 │ Other agents (L0/L1)      │   │ Transcripts (content-    │
 │                           │   │   addressed) / artifacts │
@@ -253,7 +253,7 @@ Side benefit: transcripts can be converted to a neutral format so **a different 
 
 ### Local containers
 
-- One container per agent, mounting only the worktree's working files, **not `.git`** (so agents cannot bypass the orchestrator and write refs). `git diff` / `git log` etc. are provided through turtle's MCP tools.
+- One container per agent. The workspace is a plain directory materialized from a node's tree (no `.git` inside), so agents cannot bypass the orchestrator and write refs. `git diff` / `git log` etc. are provided through turtle's MCP tools. See [phase0-spec.md](./phase0-spec.md) §3.
 - macOS bind-mount I/O is slow: put `node_modules` and similar in named volumes.
 - API keys are injected by the orchestrator from the host, never baked into images.
 
@@ -369,7 +369,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 
 | Phase | Scope | Validates |
 |---|---|---|
-| **0 Record** | CLI wrapping Claude Agent SDK + worktree + container + hooks + `turtle_checkpoint` MCP → write to `refs/turtle/*` and SQLite | Data model, checkpoint granularity |
+| **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
 | **1 Read-only UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream | Can a human keep up with the AI? |
 | **2 Control** | kill / fork / redirect / human_edit / tag snapshot | Timing and semantics of intervention |
 | **3 Explore & merge** | explore (Plan → select → Execute), compare view, merge agent, export to git, sharing failed attempts across branches, token optimization | Value and cost of parallel exploration |
@@ -388,12 +388,15 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D6 | UI | Web |
 | D7 | Checkpoints | AI-declared first, rule-based fallback, micro snapshots hidden by default |
 | D8 | Language | TypeScript; Rust only for measured hotspots |
+| D9 | Runtime | Node.js (≥ 22, 24 LTS recommended), pnpm workspace |
+| D10 | Workspace | Plain directory materialized from a node's tree + per-branch index; not a git worktree |
+| D11 | Sandbox boundary | The agent runner (Agent SDK) runs inside the container; the orchestrator stays on the host and talks to it over JSONL stdio |
 
 ## 17. TODO
 
 - [ ] **Q4**: concrete user scenarios (to walk the data flow end-to-end and validate the architecture)
 - [ ] User scope: individual vs team (currently assuming individual)
 - [ ] GC policy for throwaway branches / transcripts
-- [ ] Node.js vs Bun
+- [x] Node.js vs Bun → Node.js (D9)
 - [ ] Positioning vs existing tools
-- [ ] Detailed Phase 0 spec (directory layout, MCP tool definitions, SQLite schema)
+- [x] Detailed Phase 0 spec → [phase0-spec.md](./phase0-spec.md)
