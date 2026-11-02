@@ -248,7 +248,7 @@ CREATE TABLE agents (
 );
 
 CREATE TABLE nodes (
-  id                   TEXT PRIMARY KEY,       -- stable change-id style (8 chars base32)
+  id                   TEXT PRIMARY KEY,       -- stable change-id style (12 chars base32)
   branch_id            TEXT NOT NULL REFERENCES branches(id),
   agent_id             TEXT REFERENCES agents(id),
   kind                 TEXT NOT NULL CHECK (kind IN ('root','micro','semantic','human_edit','merge')),
@@ -329,7 +329,7 @@ CREATE TABLE snapshots (
 );
 ```
 
-IDs: 8 random characters from a lowercase base32 alphabet, shown to humans by the shortest unique prefix (min 4), as jj does. Prefixes: none for nodes; branches and agents are distinguishable by table, not by prefix.
+IDs: 12 random characters (60 bits) from a lowercase base32 alphabet, shown to humans by the shortest unique prefix (min 4), as jj does. Prefixes: none for nodes; branches and agents are distinguishable by table, not by prefix.
 
 Token accounting: each node sums `message.usage` from assistant messages since the previous node (main loop and subagents). `cost_usd_est` uses a price table in config. The run's authoritative cost is the SDK result's `total_cost_usd` (per-model detail in `modelUsage`). Summarizer calls are recorded as `checkpoint` event payloads so overhead (E4) can be measured separately.
 
