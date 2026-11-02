@@ -114,6 +114,8 @@ turtle/
   docs/
 ```
 
+pnpm is a **development-only** tool for working on turtle itself. End users never need it: turtle ships as one npm package with a `turtle` command (`npm install -g <package>` or `npx <package>`; the npm name is TBD because `turtle` is likely taken), plus the runner image for docker mode. A standalone binary is a later option.
+
 Key dependencies: `@anthropic-ai/claude-agent-sdk` (runner), `@anthropic-ai/sdk` (summarizer), `better-sqlite3`, `zod`, `commander`. Git is invoked as the `git` binary (≥ 2.40) via `execFile`; no libgit2 binding in Phase 0.
 
 > `node:sqlite` could replace `better-sqlite3` and remove the native dependency; decide when Node 24 is the minimum.
@@ -258,7 +260,8 @@ CREATE TABLE nodes (
   status               TEXT NOT NULL,          -- progress | done | blocked | need_decision | killed | failed
   trigger              TEXT,                   -- tool:<name> | declared | rule:<name> | stop | interrupt
   session_id           TEXT,
-  last_message_uuid    TEXT,                   -- resume point (§10)
+  resume_tool_use_id   TEXT,                   -- tool call whose result marks the resume point (§10)
+  resume_message_uuid  TEXT,                   -- uuid of the message carrying that tool_result; filled when it arrives
   tests                TEXT CHECK (tests IN ('pass','fail','none')),
   files_changed        INTEGER,
   lines_added          INTEGER,
@@ -442,13 +445,17 @@ You are working inside turtle, which records your work as a tree of checkpoints.
 | Case | Behavior |
 |---|---|
 | `<node>` is the head of its branch, the branch is not running, no `--fork` | **Continue**: same branch and workspace; resume the SDK session (`resume = node.session_id`) |
-| Otherwise, or `--fork` | **Fork**: new branch whose root parent is `<node>`; materialize `<node>`'s tree into a new workspace; `resume = node.session_id`, `resumeSessionAt = node.last_message_uuid`, `forkSession = true` |
+| Otherwise, or `--fork` | **Fork**: new branch whose root parent is `<node>`; materialize `<node>`'s tree into a new workspace; `resume = node.session_id`, `resumeSessionAt = node.resume_message_uuid`, `forkSession = true` |
 
-A node's `last_message_uuid` is the uuid of the last assistant message seen before the node was created.
+**Where to cut the conversation.** The Messages API requires every `tool_use` block to be answered by a `tool_result` in the next user message, so a transcript cut between the two is invalid. A resume point must therefore sit **after** the tool result:
+
+- Each node records the `tool_use_id` that produced it (`resume_tool_use_id`): the `mcp__turtle__checkpoint` call for declared nodes, or the tool call whose PostToolUse hook triggered a micro or rule-based node.
+- The hook fires before the result is appended to the transcript, so the uuid is not known yet. The orchestrator fills `resume_message_uuid` when the SDK emits the user message that carries that `tool_result`. If the assistant turn made several parallel tool calls, the cut goes after the last of their results.
+- A fork then appends the human's new message after that point. Cutting only removes a suffix and never edits the kept prefix, so prompt-cache hits and thinking blocks in the prefix stay valid.
 
 **VERIFY** (milestone M4):
 
-- `resumeSessionAt` cut at an assistant message whose tool call (e.g. `mcp__turtle__checkpoint`) has no `tool_result` yet. If the SDK rejects this, use the uuid of the following user message (the tool result) instead.
+- `resumeSessionAt` accepts the uuid of a user (tool-result) message, and how the SDK emits results of parallel tool calls (one user message or several).
 - Session lookup depends on `cwd`. Docker mode always uses `/workspace` with a shared `CLAUDE_CONFIG_DIR`, so lookups match. In `none` mode, workspaces have different paths, so turtle copies the session file into the target project directory before resuming.
 
 ---
@@ -532,6 +539,8 @@ Every field is optional. Prices are in USD per million tokens and are used only 
 | `turtle export <node> --branch <name>` | Create a normal git branch: one squashed commit (tree of `<node>`, parent = root's parent) whose message lists the semantic summaries along the path |
 | `turtle stop <branch>` | Interrupt a running agent through its PID file |
 | `turtle gc [--workspaces]` | Delete workspaces of finished branches (their content is in git) |
+| `turtle doctor` | Check consistency: every ref has DB rows, every node commit exists, no orphan running agents or workspaces |
+| `turtle stats [--criteria]` | Metrics per run (§16); `--criteria` prints pass/fail against E1–E6 |
 
 ---
 
@@ -547,7 +556,7 @@ Every field is optional. Prices are in USD per million tokens and are used only 
 
 ---
 
-## 16. Metrics
+## 16. Metrics and User Acceptance
 
 Recorded per run in `events`, printed by `turtle show --stats` / `turtle log --stats`:
 
@@ -555,6 +564,18 @@ Recorded per run in `events`, printed by `turtle show --stats` / `turtle log --s
 - Snapshot latency p50 / p95 (E3)
 - Summarizer tokens and cost; checkpoint tool calls; both as a share of run cost (E4)
 - Run duration, turns, total cost
+
+### How the user verifies Phase 0
+
+| Step | What you do | Needs | What you check |
+|---|---|---|---|
+| 1. Automated tests | Look at CI on the pull request, or run `pnpm install && pnpm test` | Node only | All green; no API cost (FakeRunner) |
+| 2. Offline demo | `pnpm demo`: builds a toy repo and replays a scripted agent, then prints `turtle log` / `show` / a fork | Node + git | The tree, summaries, diffs and fork look right; no API key needed |
+| 3. Real runs | Install turtle, run 5 real tasks on a repo you know (`turtle run ...`), answer at least one `need_decision`, fork at least once, press Ctrl-C once mid-run | Node, git, Docker, API key | You can tell what happened and why from `turtle log` / `show` without reading the transcript |
+| 4. Consistency | `turtle doctor` after the Ctrl-C run | — | No errors (E6) |
+| 5. Numbers | `turtle stats --criteria` | — | E1–E5 pass; review E2 (checkpoint count) and E4 (overhead) together with your own impression |
+
+Step 3 is the real test: Phase 0 passes only if reading the tree is clearly better than scrolling the chat. Your feedback there drives the rule tuning in M8.
 
 ---
 
@@ -568,7 +589,7 @@ Recorded per run in `events`, printed by `turtle show --stats` / `turtle log --s
 | M3 | `protocol` + FakeRunner + orchestrator loop (micro snapshots, declared checkpoints, rules) + tests |
 | M4 | `runner-claude` in `none` mode: SDK, hooks, MCP tools; VERIFY items in §10 and §13 |
 | M5 | Summarizer + Stop / interrupt checkpoints |
-| M6 | CLI: init, run (incl. continue/fork), status, log, show, checkout, tag, export, stop, gc |
+| M6 | CLI: init, run (incl. continue/fork), status, log, show, checkout, tag, export, stop, gc, doctor, stats; `pnpm demo` |
 | M7 | Docker sandbox + base image |
 | M8 | Dogfooding against the exit criteria; tune rules |
 
@@ -584,5 +605,5 @@ Recorded per run in `events`, printed by `turtle show --stats` / `turtle log --s
 | No mid-run human input | `need_decision` / `blocked` end the run; Phase 2 adds inject |
 | Session file coupling | Relies on `CLAUDE_CONFIG_DIR` and cwd-based session lookup (VERIFY, §10) |
 | Concurrency | Multiple `turtle run` processes, no daemon; Phase 1 adds the daemon |
-| Open: root snapshot | Include uncommitted changes by default? (proposed: yes, `--from-head` to opt out) |
-| Open: package manager | pnpm proposed |
+| Decided: root snapshot | Includes uncommitted changes by default; `--from-head` opts out |
+| Decided: package manager | pnpm for development only; users install one npm package |
