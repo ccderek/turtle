@@ -101,7 +101,9 @@ describe("RunSession: new branch", () => {
       summary: "Add --json option parsing\n\nParses the flag.",
       summarySource: "agent_declared",
       status: "progress",
-      filesChanged: 0,
+      filesChanged: 2, // since the root: src/app.ts and src/json.ts
+      linesAdded: 2,
+      linesDeleted: 1,
       intent: "Add a --json flag",
     });
     expect(closing).toMatchObject({ summarySource: "rule_auto", status: "done" });

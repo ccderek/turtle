@@ -6,5 +6,5 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
-  "references": [{ "path": "../protocol" }, { "path": "../core" }]
+  "references": [{ "path": "../protocol" }, { "path": "../core" }, { "path": "../runner-claude" }]
 }

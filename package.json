@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "bench:snapshot": "pnpm build && node scripts/bench-snapshot.mjs"
+    "bench:snapshot": "pnpm build && node scripts/bench-snapshot.mjs",
+    "demo": "pnpm build && node scripts/demo.mjs",
+    "e2e": "pnpm build && node scripts/e2e-real.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

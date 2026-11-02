@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@turtle/core": "workspace:*",
-    "@turtle/protocol": "workspace:*"
+    "@turtle/protocol": "workspace:*",
+    "@turtle/runner-claude": "workspace:*",
+    "commander": "^15.0.0"
   }
 }

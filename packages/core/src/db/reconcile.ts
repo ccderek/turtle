@@ -57,7 +57,9 @@ export async function reconcile(
       const imported = await importCommit(store, db, ref, commit, report);
       if (imported) report.importedNodes.push(imported);
     }
-    if (ref.startsWith(BRANCH_REF_PREFIX)) {
+    // Move the head forward only over commits imported just now. A ref that moved to an
+    // older node is a real inconsistency for `turtle doctor` to report, not to hide.
+    if (ref.startsWith(BRANCH_REF_PREFIX) && missing.length > 0) {
       const branchId = ref.slice(BRANCH_REF_PREFIX.length);
       const branch = db.getBranch(branchId);
       const head = db.getNodeByCommit(sha);

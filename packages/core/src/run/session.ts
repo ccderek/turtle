@@ -717,6 +717,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       });
       if (!res) return null;
       const { tokens, costUsd } = this.usage.drain();
+      // Semantic nodes report changes since the previous checkpoint, micro nodes since their parent.
+      const stat =
+        p.kind === "semantic" ? await store.diffStat(this.lastSemantic.tree, res.tree) : res.stat;
       const summary = p.kind === "micro" ? p.title : p.body ? `${p.title}\n\n${p.body}` : p.title;
       const node = db.transaction(() => {
         const n = db.insertNode(
@@ -739,9 +742,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
               ? (this.resumeUuidByTool.get(p.resumeToolUseId) ?? null)
               : null,
             tests: this.testsNow,
-            filesChanged: res.stat.filesChanged,
-            linesAdded: res.stat.linesAdded,
-            linesDeleted: res.stat.linesDeleted,
+            filesChanged: stat.filesChanged,
+            linesAdded: stat.linesAdded,
+            linesDeleted: stat.linesDeleted,
             tokens,
             costUsdEst: costUsd,
           }),
