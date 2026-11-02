@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "paths": {
+      "@turtle/protocol": ["./packages/protocol/src/index.ts"],
+      "@turtle/core": ["./packages/core/src/index.ts"],
+      "@turtle/runner-claude": ["./packages/runner-claude/src/index.ts"],
+      "@turtle/cli": ["./packages/cli/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]
+}

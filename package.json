@@ -1,0 +1,28 @@
+{
+  "name": "turtle-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "bench:snapshot": "pnpm build && node scripts/bench-snapshot.mjs",
+    "demo": "pnpm build && node scripts/demo.mjs",
+    "e2e": "pnpm build && node scripts/e2e-real.mjs",
+    "docker:build": "pnpm build && node scripts/docker-build.mjs",
+    "docker:smoke": "node scripts/docker-smoke.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@types/node": "^22.19.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

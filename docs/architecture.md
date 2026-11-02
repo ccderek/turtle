@@ -1,114 +1,114 @@
-# turtle — 架構設計（草案 v0.1）
+# turtle — Architecture Design (Draft v0.1)
 
-> 狀態：討論中，尚未實作。標記 `TODO` 的部分為未決議題。
+> Status: under discussion, not yet implemented. Items marked `TODO` are open questions.
 
 ---
 
-## 1. 背景與觀察
+## 1. Background & Observations
 
-1. AI 產出 artifact 的速度遠超人類吸收速度，人類無法進行版本控管。
-2. AI 會同時呼叫多個 agent 做不同的事；有些是實驗/拋棄式 code，有些不是，且每次 output 都不同（非確定性）。
-3. AI 做的不一定是使用者要的，使用者需求也持續變化，同一份 code 會經歷多次轉向，難以版本管理。
-4. 人機介面是線性的（chat），但 AI codegen 是樹狀展開；要管多個 branch 只能開多個對話、往上捲找分岔點。
-5. 人類無法即時修改 AI 做錯的 branch，只能用對話介入，難以版控。
+1. AI produces artifacts far faster than humans can absorb them, so humans lose the ability to version-control the work.
+2. AI spawns multiple agents doing different things at once. Some output is experimental / throwaway, some is not, and every run produces different output (non-determinism).
+3. What the AI does is not always what the user wants, and the user's requirements keep shifting. The same code goes through many pivots and becomes hard to track.
+4. The human–AI interface is linear (chat), but AI codegen unfolds as a tree. Managing several branches today means opening several conversations and scrolling back to find the right fork point.
+5. Humans cannot correct a wrong AI branch in real time; they can only intervene through conversation, which is not version-controlled.
 
-## 2. 目標
+## 2. Goals
 
-建立新的人機介面，讓人類能：
+Build a new human–AI interface that lets a human:
 
-- **即時**看到並控管 AI 的進度（commit tree + 正在進行的 Thinking/Working）。
-- 讓多個 AI **平行**處理，並管控每個 branch（fork / merge / kill / redirect / snapshot）。
-- 在任一 branch 手動要求 AI **探索更多方案**並比較。
-- 以正確的實作手段**節省整體 token 用量**。
+- See and control AI progress **in real time** (the commit tree plus the Thinking/Working currently in flight).
+- Run multiple AIs **in parallel** while controlling every branch (fork / merge / kill / redirect / snapshot).
+- On any branch, manually ask the AI to **explore more alternatives** and compare them.
+- **Reduce overall token usage** through the right implementation choices.
 
-## 3. 核心概念：兩棵樹
+## 3. Core Idea: Two Trees
 
-| 樹 | 內容 | 現況 |
+| Tree | Content | Today |
 |---|---|---|
-| 程式碼狀態 DAG | 程式碼長什麼樣 | git 已解決 |
-| 過程 / 意圖樹 | 誰、依什麼指示、想了什麼、花多少 token、為何分岔 | **無人處理** |
+| Code-state DAG | What the code looks like | Solved by git |
+| Process / intent tree | Who, under which instruction, thought what, spent how many tokens, and why it branched | **Nobody handles this** |
 
-**turtle 的核心價值是把這兩棵樹連起來**：每個程式碼快照都能回答「它從哪個意圖來、當時的 context 是什麼」。
+**turtle's core value is linking the two trees**: every code snapshot can answer "which intent did this come from, and what was the context at the time?"
 
-### 名詞
+### Glossary
 
-- **Node**：一個 checkpoint，等同一個 commit + 意圖/過程 metadata。
-- **Micro snapshot**：每個 tool call 後自動拍的快照，預設在 UI 隱藏。
-- **Semantic checkpoint**：有意義的階段點（AI 宣告或規則觸發），UI 預設顯示。
-- **Exploration Group**：同一次 `explore` 產生的一組兄弟 branch。
-- **Snapshot（人為標記）**：人類標記要保留、可被重用的 node。
-
----
-
-## 4. 版控底層：為什麼是 git
-
-### 4.1 git 原理（相關部分）
-
-- **物件**：blob（檔案內容）、tree（目錄）、commit（tree + parent + metadata），全部以內容雜湊命名，**相同內容只存一份**，所以頻繁快照很便宜。
-- **ref**：指向 commit 的可移動指標；歷史是 DAG。
-- **worktree**：同一 repo 多個 checkout 共用物件庫 → 天然適合多 agent 隔離。
-- **merge**：找 merge-base 做三方合併，只懂文字衝突、不懂語意。
-- **不干擾使用者的快照**：
-  `GIT_INDEX_FILE=<tmp> git add -A && git write-tree && git commit-tree <tree> -p <parent>`，再寫入 `refs/turtle/...`。
-
-### 4.2 jj（Jujutsu）值得借用的語意
-
-| jj 概念 | 對 turtle 的意義 |
-|---|---|
-| 工作目錄本身就是 commit、自動快照 | agent 每一步自動存檔 |
-| change-id 與 commit-id 分離 | 人類改寫 node 後，node 身分不變 |
-| operation log，可 undo 任何操作 | turtle 的事件日誌 + 全系統回到過去 |
-| 衝突是一等公民，可先存著 | 平行 branch 不因衝突卡死 |
-| 修改祖先 → 子孫自動 rebase | 人類修正中間 node，下游自動接上 |
-
-### 4.3 候選比較
-
-| 系統 | 評估 |
-|---|---|
-| Piper (Google) | 不開放。但 CitC「每次存檔即快照、雲端工作區」概念值得學 |
-| jj | 概念最貼合；library API 尚不穩定，不綁死 |
-| Sapling (Meta) | stacked commits 與互動式 UI (ISL) 值得參考；生態系小 |
-| Pijul | patch 理論最漂亮；太不成熟，AI/工具鏈幾乎不認識 |
-| **git** | ✅ 生態系最大、所有模型都熟、最終可直接產生 PR |
-
-### 4.4 決策
-
-**git 物件庫當儲存格式 + jj 語意當設計藍圖。**
-
-turtle 需要的 5 項能力：
-
-1. 便宜快照 → git ✅
-2. 大量平行工作區 → git worktree ✅
-3. 穩定的 node 身分 → turtle metadata 層
-4. 操作日誌 / undo → turtle metadata 層
-5. 衝突可延遲處理 → turtle metadata 層
-
-3–5 無論用哪個 VCS 都得自己做，因此換 jj 收益有限，卻會失去生態系。
-
-**規則：只有 orchestrator 能寫 git ref。** agent 只改檔案，避免多 agent 同時寫 ref 造成 lock 競爭與狀態不一致。
+- **Node**: a checkpoint — one commit plus intent/process metadata.
+- **Micro snapshot**: an automatic snapshot after every tool call; hidden in the UI by default.
+- **Semantic checkpoint**: a meaningful milestone (declared by the AI or triggered by a rule); shown in the UI by default.
+- **Exploration Group**: the set of sibling branches produced by one `explore` operation.
+- **Snapshot (human-tagged)**: a node a human marks to keep and reuse.
 
 ---
 
-## 5. 資料模型
+## 4. VCS Foundation: Why git
+
+### 4.1 How git works (relevant parts)
+
+- **Objects**: blob (file content), tree (directory), commit (tree + parents + metadata). Every object is named by its content hash, so **identical content is stored once** — frequent snapshots are cheap.
+- **Refs**: movable pointers to commits; history is a DAG.
+- **Worktrees**: multiple checkouts of one repo sharing a single object store — a natural fit for isolating many agents.
+- **Merge**: three-way merge from the merge base; understands textual conflicts only, not semantic ones.
+- **Snapshotting without disturbing the user**:
+  `GIT_INDEX_FILE=<tmp> git add -A && git write-tree && git commit-tree <tree> -p <parent>`, then write the result under `refs/turtle/...`.
+
+### 4.2 Semantics worth borrowing from jj (Jujutsu)
+
+| jj concept | Meaning for turtle |
+|---|---|
+| The working copy is itself a commit, auto-snapshotted | Every agent step is saved automatically |
+| change-id separate from commit-id | A node keeps its identity after a human rewrites it |
+| Operation log; any operation can be undone | turtle's event log + "rewind the whole system" |
+| Conflicts are first-class and can be stored | Parallel branches never get stuck on conflicts |
+| Editing an ancestor auto-rebases descendants | A human fix in the middle of a branch flows downstream |
+
+### 4.3 Candidates
+
+| System | Assessment |
+|---|---|
+| Piper (Google) | Not available externally. Its CitC idea — every save is a snapshot, workspaces live in the cloud — is worth learning from |
+| jj | Closest conceptual fit; library API not yet stable, so don't hard-depend on it |
+| Sapling (Meta) | Stacked commits and its interactive UI (ISL) are good references; small ecosystem |
+| Pijul | Most elegant patch theory; too immature, barely known to AI models and tooling |
+| **git** | ✅ Largest ecosystem, every model knows it, output becomes a normal PR |
+
+### 4.4 Decision
+
+**git object store as the storage format + jj semantics as the design blueprint.**
+
+The five capabilities turtle needs:
+
+1. Cheap snapshots → git ✅
+2. Many parallel workspaces → git worktree ✅
+3. Stable node identity → turtle metadata layer
+4. Operation log / undo → turtle metadata layer
+5. Deferred conflict resolution → turtle metadata layer
+
+Items 3–5 must be built regardless of VCS, so switching to jj gains little and loses the ecosystem.
+
+**Rule: only the orchestrator writes git refs.** Agents only modify files. This avoids lock contention and inconsistent state when many agents run concurrently.
+
+---
+
+## 5. Data Model
 
 ```ts
-type NodeId = string;          // 穩定 ID（類似 jj change-id），內容改寫後不變
+type NodeId = string;          // Stable ID (like jj change-id); survives content rewrites
 
 interface Node {
   id: NodeId;
-  parents: NodeId[];           // 一般 1 個；merge node 為多個
+  parents: NodeId[];           // usually 1; multiple for merge nodes
   kind: "micro" | "semantic" | "human_edit" | "merge" | "root";
-  commit: string;              // git commit sha（內容改寫後會變）
-  tree: string;                // git tree sha（程式碼快照）
+  commit: string;              // git commit sha (changes when content is rewritten)
+  tree: string;                // git tree sha (the code snapshot)
 
-  intent: string;              // 這段要做什麼（人的指示或 AI 的計畫）
-  summary: string;             // 給人看的摘要（= commit message）
-  summarySource: "agent_declared" | "rule_auto";  // UI 區分顯示
-  transcriptRef: TranscriptRef; // 到此為止的完整對話（fork / prompt cache 需要）
-  artifacts: ArtifactRef[];    // 測試結果、截圖、log…
+  intent: string;              // what this segment is meant to do (human instruction or AI plan)
+  summary: string;             // human-readable summary (= commit message)
+  summarySource: "agent_declared" | "rule_auto";  // rendered differently in the UI
+  transcriptRef: TranscriptRef; // full conversation up to this point (needed for fork / prompt cache)
+  artifacts: ArtifactRef[];    // test results, screenshots, logs…
   verified: { tests?: "pass" | "fail" | "none"; diffStat: DiffStat };
 
-  agentId: string | null;      // human_edit 時為 null
+  agentId: string | null;      // null for human_edit
   status: "running" | "done" | "killed" | "failed" | "blocked" | "need_decision";
   tokens: { input: number; cachedInput: number; output: number };
   costUsd: number;
@@ -118,7 +118,7 @@ interface Node {
   createdAt: string;
 }
 
-interface Event {              // 類似 jj operation log，append-only
+interface Event {              // like jj's operation log; append-only
   id: string;
   at: string;
   actor: { type: "agent" | "human" | "system"; id: string };
@@ -131,49 +131,50 @@ interface Event {              // 類似 jj operation log，append-only
 
 ---
 
-## 6. 系統架構
+## 6. System Architecture
 
 ```
-┌──────────────────── Web UI ─────────────────────┐
-│ 待處理佇列 │ Tree 視圖 │ Node 詳情 │ 比較視圖 │ 即時串流 │
-│ 操作：fork / explore / kill / redirect / merge / tag │
-└──────────────▲───────────────────┬──────────────┘
-               │ WebSocket（事件）  │ HTTP（指令）
-┌──────────────┴───────────────────▼──────────────┐
-│ Orchestrator（TypeScript daemon, 本機）           │
-│  • Agent 生命週期：spawn / interrupt / kill        │
-│  • Checkpoint 引擎：hook → 快照 → 摘要 → Node      │
-│  • Context 組裝器：fork 時要給子 agent 什麼         │
-│  • 探索流程：Plan → 人篩選 → Execute               │
-│  • 預算控制：token / 平行數 / 樹深度上限            │
-│  • 唯一的 git ref 寫入者                           │
-└──────┬──────────────────────────┬───────────────┘
-       │ Adapter 介面              │
-┌──────▼────────────────┐  ┌──────▼──────────────────┐
-│ Agent Runtime          │  │ Storage                 │
-│ 每 agent 一個 container │  │ git 物件庫 refs/turtle/* │
-│ + 一個 git worktree    │  │ SQLite：nodes / events  │
-│ Claude Agent SDK (L2)  │  │ transcripts（內容定址）  │
-│ 其他 agent (L0/L1)     │  │ artifacts               │
-└────────────────────────┘  └─────────────────────────┘
+┌──────────────────────── Web UI ─────────────────────────┐
+│ Attention queue │ Tree view │ Node detail │ Compare │ Live │
+│ Actions: fork / explore / kill / redirect / merge / tag  │
+└───────────────▲─────────────────────────┬───────────────┘
+                │ WebSocket (events)       │ HTTP (commands)
+┌───────────────┴─────────────────────────▼───────────────┐
+│ Orchestrator (TypeScript daemon, local)                  │
+│  • Agent lifecycle: spawn / interrupt / kill             │
+│  • Checkpoint engine: hook → snapshot → summary → Node   │
+│  • Context assembler: what a forked child agent receives │
+│  • Explore flow: Plan → human selects → Execute          │
+│  • Budget control: tokens / parallelism / tree depth     │
+│  • Sole writer of git refs                               │
+└───────┬───────────────────────────────┬─────────────────┘
+        │ Adapter interface              │
+┌───────▼──────────────────┐   ┌────────▼─────────────────┐
+│ Agent Runtime             │   │ Storage                  │
+│ 1 container + 1 workspace │   │ git object store         │
+│   dir per agent           │   │   refs/turtle/*          │
+│ Claude Agent SDK (L2)     │   │ SQLite: nodes / events   │
+│ Other agents (L0/L1)      │   │ Transcripts (content-    │
+│                           │   │   addressed) / artifacts │
+└───────────────────────────┘   └──────────────────────────┘
 ```
 
-### UI 原則
+### UI principles
 
-- **人的注意力才是瓶頸**。首頁是「待處理佇列」（`blocked` / `need_decision` / 測試失敗 / 預算警告），tree 是導覽工具。
-- tree 預設只顯示 semantic checkpoint，可收合整段路徑；micro snapshot 按需展開。
-- 「AI 宣稱的」與「實際驗證的」（測試、diffStat）分開顯示。
-- 從任一 node fork 時顯示預估成本（cache 是否還有效）。
+- **Human attention is the bottleneck.** The home screen is an attention queue (`blocked` / `need_decision` / failing tests / budget warnings). The tree is a navigation aid.
+- The tree shows semantic checkpoints by default; whole path segments can be collapsed; micro snapshots expand on demand.
+- What the AI *claims* is shown separately from what is *verified* (tests, diffStat).
+- Forking from any node shows an estimated cost (whether the prompt cache is still warm).
 
 ---
 
-## 7. Checkpoint 機制
+## 7. Checkpoint Mechanism
 
-**決策：AI 宣告為主，規則保底。**
+**Decision: AI-declared checkpoints first, with rule-based fallback.**
 
-### 7.1 AI 宣告
+### 7.1 AI-declared
 
-turtle 以 MCP 工具提供：
+turtle exposes an MCP tool:
 
 ```
 turtle_checkpoint(
@@ -183,202 +184,219 @@ turtle_checkpoint(
 )
 ```
 
-System prompt 指引：完成一個子目標、要改變方向、需要人決策時呼叫。`blocked` / `need_decision` 直接進入待處理佇列。
+The system prompt instructs the agent to call it when it finishes a sub-goal, changes direction, or needs a human decision. `blocked` / `need_decision` go straight into the attention queue.
 
-### 7.2 規則保底
+### 7.2 Rule-based fallback
 
-AI 長時間未宣告時自動補 checkpoint，觸發條件（任一）：
+If the AI has not declared a checkpoint for a while, turtle inserts one automatically when any of these triggers fire:
 
-- 超過 N 個 tool call 或 M 分鐘
-- 變動行數 / 檔案數超過門檻
-- 測試狀態翻轉（fail→pass 或 pass→fail）
+- More than N tool calls or M minutes
+- Changed lines / files exceed a threshold
+- Test status flips (fail→pass or pass→fail)
 
-自動 checkpoint 由小模型（如 Haiku）依 diff + tool call 列表寫摘要，不餵完整 thinking；UI 以不同樣式標示。
+Auto checkpoints are summarized by a small model (e.g. Haiku) from the diff + tool-call list, not the full thinking. The UI renders them in a distinct style.
 
-### 7.3 Micro snapshot
+### 7.3 Micro snapshots
 
-每個 tool call 後自動拍，預設隱藏，用於細粒度回溯。
+Taken automatically after every tool call, hidden by default, used for fine-grained rewind.
 
 ---
 
-## 8. 操作語意
+## 8. Operation Semantics
 
-| 操作 | 語意 |
+| Operation | Semantics |
 |---|---|
-| **fork(node, 指示)** | 從 node 開新 branch，新 agent 接手 |
-| **explore(node, 指示, N)** | 兩階段：① Plan：一個 agent 列出 N 個「真正不同」的方案（便宜）② 人篩選 ③ Execute：每 agent 一個方案，並告知兄弟在做什麼。產生 Exploration Group |
-| **kill(agent)** | 在下一個 tool 邊界停止，最後狀態存為 node（status=killed） |
-| **redirect(agent, 指示)** | 在 tool 邊界中斷，transcript 注入「方向已變更」訊息後繼續 |
-| **human_edit(node)** | 人的修改成為一個 node（作者=human）；正在跑的下游 agent 在下一個 tool 邊界 rebase 到其上，**並把人的修改注入 agent context**，避免被改回去 |
-| **merge(a, b)** | 本身是一個 agent 任務，產出 merge node，必須跑測試（處理語意衝突）。衝突可先存在 node 上延後處理 |
-| **tag snapshot(node)** | 標記保留，不被 GC，可重用 |
-| **export(node)** | 把 root→node 路徑整理成乾淨 git 歷史（可 squash），產生一般 branch / PR |
+| **fork(node, instruction)** | Start a new branch from a node; a new agent takes over |
+| **explore(node, instruction, N)** | Two phases: ① Plan — one agent lists N *genuinely different* approaches (cheap) ② the human selects ③ Execute — one agent per approach, each told what its siblings are doing. Produces an Exploration Group |
+| **kill(agent)** | Stop at the next tool boundary; the final state is saved as a node (status = killed) |
+| **redirect(agent, instruction)** | Interrupt at a tool boundary, inject a "direction changed" message into the transcript, continue |
+| **human_edit(node)** | The human's change becomes a node (author = human). Running downstream agents rebase onto it at their next tool boundary, **and the human's change is injected into the agent's context** so the agent does not revert it |
+| **merge(a, b)** | Itself an agent task that produces a merge node and must run tests (handles semantic conflicts). Conflicts may be stored on the node and resolved later |
+| **tag snapshot(node)** | Mark to keep; exempt from GC; reusable |
+| **export(node)** | Turn the root→node path into clean git history (optionally squashed) as a normal branch / PR |
 
-### 比較視圖
+### Compare view
 
-Exploration Group 的兄弟 branch 並排：diff、測試結果、程式碼大小、token 花費；操作：「選這個」、「合併 A 與 B 的優點」。
+Sibling branches in an Exploration Group side by side: diff, test results, code size, token spend. Actions: "pick this one", "merge the best of A and B".
 
 ---
 
-## 9. 多模型：Adapter 分級
+## 9. Multi-Model: Tiered Adapters
 
-核心（node / tree / VCS / UI）與模型無關；與模型綁定的只有 agent runtime 層。
+The core (node / tree / VCS / UI) is model-agnostic; only the agent-runtime layer is model-specific.
 
-| Level | 能力 | 適用 |
+| Level | Capability | Applies to |
 |---|---|---|
-| **L0** 檔案系統監看 | 只看 worktree 變化做快照 | 任何 agent（Codex、Gemini CLI、Aider…） |
-| **L1** 結構化事件 | hook / 事件串流，知道 tool call 邊界與 thinking | 有 hook 的 agent |
-| **L2** 完全控制 | turtle 管 agent loop 與 transcript：任意 node fork、中斷、注入、prompt cache | Claude Agent SDK（第一個實作） |
+| **L0** Filesystem watch | Snapshot from worktree changes only | Any agent (Codex, Gemini CLI, Aider, …) |
+| **L1** Structured events | Hooks / event stream: tool-call boundaries and thinking | Agents that expose hooks |
+| **L2** Full control | turtle owns the agent loop and transcript: fork from any node, interrupt, inject, prompt cache | Claude Agent SDK (first implementation) |
 
-各家差異：prompt cache 機制與 TTL、thinking 可見性（Claude thinking block 帶簽章，不可跨模型）、transcript 格式、中斷能力。
+Provider differences: prompt-cache mechanics and TTL, thinking visibility (Claude thinking blocks are signed and cannot move across models), transcript format, interrupt capability.
 
-附帶功能：transcript 可轉中立格式，讓**另一個模型接手同一個 branch**（cache 失效、thinking 無法帶過去）。
+Side benefit: transcripts can be converted to a neutral format so **a different model can continue the same branch** (the cache is lost and thinking blocks don't carry over).
 
 ---
 
-## 10. 回滾範圍與執行環境
+## 10. Rollback Scope & Execution Environment
 
-**決策：只回滾程式碼。前提：環境必須寫成程式碼。**
+**Decision: roll back code only. Prerequisite: the environment must be defined as code.**
 
-> 原則：程式碼 + 寫成程式碼的環境 = 完整狀態；沒寫進去的都可丟；不可逆的操作一定要人確認。
+> Principle: code + environment-as-code = the complete state; anything not declared is disposable; any irreversible action requires human confirmation.
 
-| 風險 | 對策 |
+| Risk | Mitigation |
 |---|---|
-| 環境重建花時間（非 token），× 平行 agent 數 | 以 lockfile 雜湊為 key 快取 image / 依賴 |
-| 資料庫 schema 與回滾後的程式碼不一致 | 每 worktree 一個一次性 DB（SQLite 檔 / Postgres template clone / container），從 seed 重建 |
-| 不可逆外部副作用（email、付款、push、雲資源） | 攔截並要求人確認 |
-| 未追蹤檔案（`.env`、產物） | 明確快照政策；機密絕不進快照 |
-| 用 AI 重建環境會耗 token 且不確定 | 讓 AI 產出**確定性腳本**存進 repo，之後跑腳本 |
+| Environment rebuilds cost time (not tokens), multiplied by parallel agents | Cache images / dependencies keyed by lockfile hash |
+| Database schema out of sync with rolled-back code | One disposable DB per worktree (SQLite file / Postgres template clone / container), rebuilt from seed |
+| Irreversible external side effects (email, payments, push, cloud resources) | Intercept and require human confirmation |
+| Untracked files (`.env`, build outputs) | Explicit snapshot policy; secrets never enter snapshots |
+| Rebuilding the environment *via AI* costs tokens and is non-deterministic | Have the AI write **deterministic scripts** into the repo; run the scripts afterwards |
 
-### 本機 container
+### Local containers
 
-- 每 agent 一個 container，只掛載 worktree 工作目錄，**不掛 `.git`**（防止 agent 繞過 orchestrator 寫 ref）。`git diff` / `git log` 等由 turtle MCP 工具提供。
-- macOS bind mount I/O 慢：`node_modules` 等改用 named volume。
-- API key 由 orchestrator 從 host 注入，不寫進 image。
-
----
-
-## 11. Token 節省策略
-
-1. **Fork 吃 prompt cache**：子 agent transcript 前綴與父完全相同 → 命中 cache（約一成價格）。因此 node 必須保存完整 transcript。
-2. **Cache 過期的取捨**：cache 有 TTL（5 分鐘 / 1 小時）。過期後可選「摘要鏈」（便宜、失細節）或「完整 transcript」（準、貴），UI 顯示預估成本由人選。
-3. **及早砍錯誤 branch**：即時可見 + 一鍵 kill 是最大的節省來源。
-4. **避免重複探索**：fork / explore 時告知子 agent 兄弟已試過且失敗的方案（摘要）。
-5. **摘要分層**：只在 semantic checkpoint 做摘要，用小模型。
-6. **Explore 先 Plan 再 Execute**：便宜規劃，只執行人選中的方案。
-7. **預算上限**：每個 branch / 整棵樹的 token、平行數、深度上限。
+- One container per agent. The workspace is a plain directory materialized from a node's tree (no `.git` inside), so agents cannot bypass the orchestrator and write refs. `git diff` / `git log` etc. are provided through turtle's MCP tools. See [phase0-spec.md](./phase0-spec.md) §3.
+- macOS bind-mount I/O is slow: put `node_modules` and similar in named volumes.
+- API keys are injected by the orchestrator from the host, never baked into images.
 
 ---
 
-## 12. 技術選型
+## 11. Token-Saving Strategy
 
-**TypeScript（Node.js 或 Bun）作為 orchestrator 與 Web UI 的語言。**
+1. **Forks hit the prompt cache**: a child transcript whose prefix exactly matches the parent's gets cache hits (roughly 10% of the normal input price). Nodes must therefore store the full transcript.
+2. **Trade-off once the cache expires**: caches have a TTL (5 min / 1 h). After expiry, choose between a summary chain (cheap, loses detail) and the full transcript (accurate, expensive). The UI shows the estimated cost and lets the human choose.
+3. **Kill wrong branches early**: real-time visibility + one-click kill is the biggest saving.
+4. **Avoid repeated exploration**: on fork / explore, tell child agents which approaches siblings already tried and failed (as summaries).
+5. **Tiered summaries**: summarize only at semantic checkpoints, using a small model.
+6. **Explore = Plan, then Execute**: plan cheaply, execute only the approaches the human picks.
+7. **Budget caps**: per-branch and per-tree limits on tokens, parallelism, and depth.
 
-| 考量 | 說明 |
+---
+
+## 12. Tech Stack
+
+**TypeScript (Node.js or Bun) for both the orchestrator and the Web UI.**
+
+| Consideration | Notes |
 |---|---|
-| Claude Agent SDK | TypeScript 是官方主力版本 |
-| 前後端共用型別 | `Node` / `Event` 等型別一份定義 |
-| 普及度 / AI 熟悉度 | 依 GitHub Octoverse 2025，TypeScript 是 GitHub 上使用人數最多的語言 |
-| 效能 | 瓶頸是 LLM 延遲（秒級），不是 CPU；git 快照為毫秒級 |
+| Claude Agent SDK | TypeScript is the primary official SDK |
+| Shared types | `Node` / `Event` etc. defined once for backend and frontend |
+| Adoption / AI familiarity | Per GitHub Octoverse 2025, TypeScript is the most-used language on GitHub by contributors |
+| Performance | The bottleneck is LLM latency (seconds), not CPU; git snapshots take milliseconds |
 
-快照引擎先直接呼叫 git plumbing 指令；若出現瓶頸，再將熱點改為 Rust（gitoxide + napi-rs）。
+The snapshot engine starts by calling git plumbing commands directly. If a hotspot appears, rewrite just that part in Rust (gitoxide + napi-rs) — no full rewrite needed.
 
 ---
 
-## 13. 擴展性（Scale-up）
+## 13. Scale-up
 
-**結論：真正的上限是人的注意力、API rate limit、本機 RAM（container 數），不是 TypeScript。** 但以下幾點要從一開始就設計對：
+**Bottom line: the real limits are human attention, API rate limits, and local RAM (number of containers) — not TypeScript.** The following must be designed correctly from day one, because retrofitting them later is expensive.
 
-### 13.1 Node 數量（數千～數十萬）
+### 13.1 Node count (thousands to hundreds of thousands)
 
-| 層 | 問題 | 對策 |
+| Layer | Problem | Mitigation |
 |---|---|---|
-| SQLite | 百萬列內無壓力 | 建好索引（parent、agent、status、explorationGroup）；之後可換 Postgres |
-| git ref | **每個 node 一個 ref 會拖垮 git**（大量 loose ref） | 只對「branch 尖端」與「snapshot」建 ref；node 是尖端的祖先，自然可達；使用 packed-refs 或 reftable（git ≥ 2.45） |
-| git GC | 沒有 ref 指向的 commit 會被 gc 清掉 | 被 kill 的 branch 保留尖端 ref 直到 turtle 自己的 GC 政策刪除 |
-| git 物件 | 內容定址，重複內容自動去重 | 定期 `git repack` |
+| SQLite | Fine up to millions of rows | Index `parent`, `agentId`, `status`, `explorationGroupId`; wrap behind an interface so it can move to Postgres |
+| git refs | **One ref per node will cripple git** (huge numbers of loose refs) | Create refs only for branch tips and tagged snapshots; every other node is an ancestor of a tip and stays reachable. Use packed-refs or reftable (git ≥ 2.45) |
+| git GC | Commits with no ref pointing at them get removed by `git gc` | Keep the tip ref of killed branches until turtle's own GC policy deletes it |
+| git objects | Content-addressed, duplicates deduplicated automatically | Periodic `git repack` |
 
-### 13.2 Transcript 體積
+### 13.2 Transcript size
 
-- 子 transcript = 父 transcript + 新增訊息 → **只存新增段落**（append-only 分段 + 指向父段落），fork 幾乎零儲存成本。
-- 分段以內容雜湊存放於磁碟（之後可換 object storage）。
+- A child transcript = parent transcript + new messages → **store only the new segment** (append-only segments, each pointing to its parent segment). Forks cost almost no storage.
+- Segments are stored on disk by content hash (later swappable for object storage).
 
-### 13.3 大型 repo 的快照速度
+### 13.3 Snapshot speed on large repos
 
-- `git add -A` 在大 repo 需掃描整個目錄樹。
-- 對策：agent 透過工具寫檔時已知變動路徑 → 增量建 tree；bash 指令可能改任何檔案 → 開啟 fsmonitor / untracked cache 作後備。
+- `git add -A` scans the whole tree on a large repo.
+- When an agent writes files through tools, turtle already knows the changed paths → build the tree incrementally.
+- Bash commands can change any file → use git's fsmonitor / untracked cache as a fallback.
 
 ### 13.4 UI
 
-- 不推整棵樹，只推增量事件；diff、transcript 延遲載入。
-- 樹狀圖虛擬化渲染 + 收合 + 依縮放程度調整細節。
-- 多 agent token 串流以固定頻率（如 10Hz）批次推送。
+- Push incremental events, never the whole tree; load diffs and transcripts lazily.
+- Virtualized tree rendering + collapsing + level-of-detail by zoom.
+- Batch token streams from many agents and push at a fixed rate (e.g. 10 Hz).
 
-### 13.5 Node.js 單執行緒
+### 13.5 Node.js single thread
 
-- orchestrator 幾乎全是 I/O（API 呼叫、git 子程序、檔案），單執行緒足夠。
-- CPU 密集工作（大 diff 計算、樹狀佈局）放到 `worker_threads` 或交給瀏覽器端。
+- The orchestrator is almost entirely I/O-bound (API calls, git subprocesses, files); one thread is enough.
+- CPU-heavy work (large diffs, tree layout) goes to `worker_threads` or the browser.
 
-### 13.6 走向雲端 / 團隊（未來）
+### 13.6 Moving to cloud / teams (future)
 
-- 從一開始把 Storage 與 Agent Runtime 抽象成介面：SQLite→Postgres、本機檔案→object storage、本機 container→遠端 container。
-- orchestrator 狀態盡量放在 DB，以便日後水平擴展。
+- Abstract Storage and Agent Runtime behind interfaces from the start: SQLite → Postgres, local files → object storage, local containers → remote containers.
+- Keep orchestrator state in the DB so it can scale horizontally later.
 
----
+### 13.7 Where Rust would help
 
-## 14. 風險與未決問題
-
-### 根本性
-
-1. **checkpoint 粒度**：太細會重現觀察 1 → 兩層 checkpoint + 收合（§7）。
-2. **人的注意力瓶頸**：待處理佇列優先於 tree（§6）。
-3. **非程式碼狀態**：env-as-code + 不可逆操作攔截（§10）。
-
-### 技術
-
-4. 人與 AI 同時改同一 worktree 的 race condition（§8 human_edit）。
-5. redirect 只能在 tool 邊界生效，且需注入 context。
-6. 語意衝突的 merge（§8 merge）。
-7. fork 時的 context 量：準確 vs 成本。
-8. 摘要可能說謊 → 綁定客觀驗證（§5 `verified`）。
-
-### 產品
-
-9. 誰決定開平行 agent？AI 自行開分支需預算 / 深度上限。
-10. 拋棄式 branch 與 transcript 的 GC 政策。`TODO`
-11. 與現有工具（Claude Code checkpoint/rewind、subagents、Cursor background agents 等）的差異化定位。`TODO`
+Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Rewrite that module with gitoxide + napi-rs and keep the rest in TypeScript.
 
 ---
 
-## 15. 分期計畫
+## 14. Risks & Open Issues
 
-| Phase | 範圍 | 驗證什麼 |
+### Fundamental
+
+1. **Checkpoint granularity**: too fine recreates Observation 1 → two-tier checkpoints + collapsing (§7).
+2. **Human attention bottleneck**: the attention queue takes priority over the tree (§6).
+3. **Non-code state**: environment-as-code + interception of irreversible actions (§10).
+
+### Technical
+
+4. Race conditions when a human and an AI edit the same worktree (§8 human_edit).
+5. Redirect only takes effect at tool boundaries and needs context injection.
+6. Merges with semantic conflicts (§8 merge).
+7. How much context a fork receives: accuracy vs cost.
+8. Summaries can be wrong → tie them to objective verification (§5 `verified`).
+
+### Scale-up
+
+9. Too many git refs degrades git performance → refs only for tips / snapshots (§13.1).
+10. Unreferenced commits lost to `git gc` → turtle-managed tip refs and GC policy (§13.1).
+11. Transcript storage growth → append-only segment dedup (§13.2).
+12. Snapshot latency on large repos → incremental tree build + fsmonitor (§13.3).
+13. UI overload with thousands of nodes and many live streams → incremental events, virtualization, batched streaming (§13.4).
+14. Parallelism bounded by API rate limits and local RAM → budget/parallelism caps; remote containers later (§11, §13.6).
+
+### Product
+
+15. Who decides to spawn parallel agents? If the AI can branch on its own, it needs budget / depth caps.
+16. GC policy for throwaway branches and transcripts. `TODO`
+17. Positioning vs existing tools (Claude Code checkpoint/rewind, subagents, Cursor background agents, etc.). `TODO`
+
+---
+
+## 15. Phased Plan
+
+| Phase | Scope | Validates |
 |---|---|---|
-| **0 記錄** | CLI 包 Claude Agent SDK + worktree + container + hook + `turtle_checkpoint` MCP → 寫入 `refs/turtle/*` 與 SQLite | 資料模型、checkpoint 粒度 |
-| **1 唯讀 UI** | Web：待處理佇列、tree、node 詳情（diff / summary / artifact）、即時串流 | 人能否跟上 AI |
-| **2 控制** | kill / fork / redirect / human_edit / tag snapshot | 介入的時機與語意 |
-| **3 探索與合併** | explore（Plan→篩選→Execute）、比較視圖、merge agent、export to git、跨 branch 失敗經驗傳遞、token 優化 | 平行探索的價值與成本 |
+| **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
+| **1 Read-only UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream | Can a human keep up with the AI? |
+| **2 Control** | kill / fork / redirect / human_edit / tag snapshot | Timing and semantics of intervention |
+| **3 Explore & merge** | explore (Plan → select → Execute), compare view, merge agent, export to git, sharing failed attempts across branches, token optimization | Value and cost of parallel exploration |
 
 ---
 
-## 16. 決策紀錄
+## 16. Decision Log
 
-| # | 項目 | 決定 |
+| # | Topic | Decision |
 |---|---|---|
-| D1 | 版控底層 | git 物件庫 + SQLite metadata，借用 jj 語意；orchestrator 為唯一 ref 寫入者 |
-| D2 | 使用模式 | 監控/控制 + 探索，任一 branch 可手動 explore |
-| D3 | 模型 | 通用 Adapter（L0/L1/L2），先做 Claude Agent SDK |
-| D4 | 回滾範圍 | 只回滾程式碼；環境寫成程式碼 |
-| D5 | 執行環境 | 前期本機 + 每 agent 一個 container |
+| D1 | VCS foundation | git object store + SQLite metadata, jj-style semantics; orchestrator is the sole ref writer |
+| D2 | Usage modes | Monitor/control + explore; any branch can be explored manually |
+| D3 | Models | Generic tiered adapters (L0/L1/L2); Claude Agent SDK first |
+| D4 | Rollback scope | Code only; environment defined as code |
+| D5 | Execution environment | Local + one container per agent (early phases) |
 | D6 | UI | Web |
-| D7 | Checkpoint | AI 宣告為主，規則保底，micro snapshot 預設隱藏 |
-| D8 | 語言 | TypeScript；Rust 僅於需要時用於熱點 |
+| D7 | Checkpoints | AI-declared first, rule-based fallback, micro snapshots hidden by default |
+| D8 | Language | TypeScript; Rust only for measured hotspots |
+| D9 | Runtime | Node.js (≥ 22, 24 LTS recommended), pnpm workspace |
+| D10 | Workspace | Plain directory materialized from a node's tree + per-branch index; not a git worktree |
+| D11 | Sandbox boundary | The agent runner (Agent SDK) runs inside the container; the orchestrator stays on the host and talks to it over JSONL stdio |
 
 ## 17. TODO
 
-- [ ] **Q4**：使用者的具體使用場景（用來從頭到尾走一次資料流，驗證架構）
-- [ ] 使用者範圍：個人 vs 團隊（目前假設個人）
-- [ ] 拋棄式 branch / transcript 的 GC 政策
-- [ ] Node.js vs Bun
-- [ ] 與現有工具的差異化定位
-- [ ] Phase 0 的詳細規格（目錄結構、MCP 工具定義、SQLite schema）
+- [ ] **Q4**: concrete user scenarios (to walk the data flow end-to-end and validate the architecture)
+- [ ] User scope: individual vs team (currently assuming individual)
+- [ ] GC policy for throwaway branches / transcripts
+- [x] Node.js vs Bun → Node.js (D9)
+- [ ] Positioning vs existing tools
+- [x] Detailed Phase 0 spec → [phase0-spec.md](./phase0-spec.md)

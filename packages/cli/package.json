@@ -1,0 +1,24 @@
+{
+  "name": "@turtle/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "turtle": "./dist/main.js"
+  },
+  "dependencies": {
+    "@turtle/core": "workspace:*",
+    "@turtle/protocol": "workspace:*",
+    "@turtle/runner-claude": "workspace:*",
+    "commander": "^15.0.0"
+  }
+}
