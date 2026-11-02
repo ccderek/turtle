@@ -238,7 +238,6 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         identity: await store.userIdentity(),
         fromHead: opts.fromHead ?? false,
       });
-      await store.updateRef(ref, root.commit, null);
       workspace = join(workspaceRoot, branchId);
       const headLabel = root.head ? root.head.slice(0, 7) : "(no commits)";
       branch = db.transaction(() => {
@@ -266,6 +265,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         );
         return b;
       });
+      // Rows first, then the ref: a concurrent reconcile must never import this root itself.
+      await store.updateRef(ref, root.commit, null);
       headNode = db.getNode(rootId) as TurtleNode;
       await store.materialize(root.commit, workspace, store.indexFileFor(branchId));
       await copyIgnored(store.topLevel, workspace, config.workspace.copyIgnored);
@@ -343,7 +344,12 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       branchId: branch.id,
       nodeId: headNode.id,
       agentId,
-      payload: { mode, prompt: opts.prompt, resumed: Boolean(resume.resume) },
+      payload: {
+        mode,
+        prompt: opts.prompt,
+        resumed: Boolean(resume.resume),
+        maxBudgetUsd: opts.maxBudgetUsd ?? config.agent.maxBudgetUsd ?? null,
+      },
     });
 
     const session = new RunSession(deps, opts, mode, branch, agentId, workspace);
@@ -382,15 +388,36 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       resumed: Boolean(resume.resume),
     });
 
-    const transport = await deps.launcher({
-      agentId,
-      branchId: branch.id,
-      workspace,
-      sandbox,
-      claudeConfigDir: join(store.turtleDir, "claude"),
-      logFile: join(store.turtleDir, "logs", `${agentId}.log`),
-      env: {},
-    });
+    let transport: RunnerTransport;
+    try {
+      transport = await deps.launcher({
+        agentId,
+        branchId: branch.id,
+        workspace,
+        sandbox,
+        claudeConfigDir: join(store.turtleDir, "claude"),
+        logFile: join(store.turtleDir, "logs", `${agentId}.log`),
+        env: {},
+      });
+    } catch (err) {
+      // A long-lived host (turtle ui) stays alive, so reconcile would never mark this agent
+      // dead: record the failure now.
+      const error = err instanceof Error ? err.message : String(err);
+      db.transaction(() => {
+        db.updateAgent(agentId, { status: "failed", endedAt: new Date().toISOString() });
+        db.updateBranch(branch.id, { status: "failed" });
+        db.appendEvent({
+          actorType: "system",
+          actorId: null,
+          type: "run_end",
+          branchId: branch.id,
+          nodeId: headNode.id,
+          agentId,
+          payload: { agentId, branchId: branch.id, reason: "failed", error },
+        });
+      });
+      throw err;
+    }
     session.transport = transport;
     transport.onMessage((msg) =>
       session.onRunnerMessage(msg, `${promptPrefix}${opts.prompt}`, startOptions),

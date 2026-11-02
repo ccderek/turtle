@@ -19,6 +19,8 @@
     "@turtle/core": "workspace:*",
     "@turtle/protocol": "workspace:*",
     "@turtle/runner-claude": "workspace:*",
+    "@turtle/server": "workspace:*",
+    "@turtle/web": "workspace:*",
     "commander": "^15.0.0"
   }
 }

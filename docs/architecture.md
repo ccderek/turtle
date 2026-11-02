@@ -138,7 +138,7 @@ interface Event {              // like jj's operation log; append-only
 │ Attention queue │ Tree view │ Node detail │ Compare │ Live │
 │ Actions: fork / explore / kill / redirect / merge / tag  │
 └───────────────▲─────────────────────────┬───────────────┘
-                │ WebSocket (events)       │ HTTP (commands)
+                │ SSE (events)             │ HTTP (commands)
 ┌───────────────┴─────────────────────────▼───────────────┐
 │ Orchestrator (TypeScript daemon, local)                  │
 │  • Agent lifecycle: spawn / interrupt / kill             │
@@ -315,6 +315,7 @@ The snapshot engine starts by calling git plumbing commands directly. If a hotsp
 - Push incremental events, never the whole tree; load diffs and transcripts lazily.
 - Virtualized tree rendering + collapsing + level-of-detail by zoom.
 - Batch token streams from many agents and push at a fixed rate (e.g. 10 Hz).
+- Phase 1 status: diffs and transcripts are lazy and incremental, but every change still refetches the whole state and the tree is not virtualized. That is fine for hundreds of nodes; delta sync and virtualization come before thousands ([phase1-spec.md](./phase1-spec.md) §11).
 
 ### 13.5 Node.js single thread
 
@@ -370,7 +371,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | Phase | Scope | Validates |
 |---|---|---|
 | **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
-| **1 Read-only UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream | Can a human keep up with the AI? |
+| **1 Web UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream, plus the Phase 0 actions (run / answer / fork / stop / tag / export). Spec: [phase1-spec.md](./phase1-spec.md) | Can a human keep up with the AI? |
 | **2 Control** | kill / fork / redirect / human_edit / tag snapshot | Timing and semantics of intervention |
 | **3 Explore & merge** | explore (Plan → select → Execute), compare view, merge agent, export to git, sharing failed attempts across branches, token optimization | Value and cost of parallel exploration |
 
@@ -391,6 +392,9 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D9 | Runtime | Node.js (≥ 22, 24 LTS recommended), pnpm workspace |
 | D10 | Workspace | Plain directory materialized from a node's tree + per-branch index; not a git worktree |
 | D11 | Sandbox boundary | The agent runner (Agent SDK) runs inside the container; the orchestrator stays on the host and talks to it over JSONL stdio |
+| D12 | UI transport | HTTP for commands, Server-Sent Events for pushes; the server detects changes by polling SQLite `data_version`, so runs in other processes show up live |
+| D13 | Phase 1 scope | The web UI also exposes the actions the Phase 0 CLI already had (run, answer/continue, fork, stop, tag, export); `turtle ui` is itself an orchestrator for runs started from the browser |
+| D14 | UI security | Loopback only; Host check against DNS rebinding; writes require a custom header + JSON (forced CORS preflight, never approved); artifacts served in a CSP sandbox |
 
 ## 17. TODO
 
@@ -400,3 +404,4 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 - [x] Node.js vs Bun → Node.js (D9)
 - [ ] Positioning vs existing tools
 - [x] Detailed Phase 0 spec → [phase0-spec.md](./phase0-spec.md)
+- [x] Phase 1 spec → [phase1-spec.md](./phase1-spec.md); manual test guide → [tutorial.md](./tutorial.md)

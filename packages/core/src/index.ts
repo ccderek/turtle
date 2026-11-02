@@ -6,6 +6,7 @@ export * from "./git/exec.js";
 export * from "./git/message.js";
 export * from "./git/store.js";
 export * from "./ids.js";
+export * from "./ops.js";
 export * from "./run/anthropic-summarizer.js";
 export * from "./run/docker.js";
 export * from "./run/prompt.js";

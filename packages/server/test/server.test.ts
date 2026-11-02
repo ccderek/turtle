@@ -1,0 +1,354 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  DEFAULT_CONFIG,
+  type FakeAgent,
+  type FakeScript,
+  fakeLauncher,
+  GitStore,
+  git,
+  HeuristicSummarizer,
+  mergeConfig,
+  requestStop,
+  TurtleDb,
+} from "@turtle/core";
+import { afterEach, describe, expect, it } from "vitest";
+import type {
+  DiffResponse,
+  NodeDetailResponse,
+  RunResponse,
+  StateResponse,
+  TranscriptResponse,
+} from "../src/api.js";
+import { startServer, type TurtleServer } from "../src/server.js";
+
+Object.assign(process.env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+
+let current: TurtleServer | null = null;
+afterEach(async () => {
+  await current?.close();
+  current = null;
+});
+
+/** Scripts are picked per run from a queue the test fills. */
+async function setup(opts: { failLaunch?: boolean } = {}) {
+  const repo = await mkdtemp(join(tmpdir(), "turtle-srv-"));
+  await git(["init", "-q", "-b", "main"], { cwd: repo });
+  await writeFile(join(repo, "a.txt"), "a\n");
+  await git(["add", "-A"], { cwd: repo });
+  await git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"], {
+    cwd: repo,
+  });
+  const store = await GitStore.open(repo);
+  const dbPath = join(store.turtleDir, "turtle.db");
+  const db = TurtleDb.open(dbPath);
+  const config = mergeConfig(structuredClone(DEFAULT_CONFIG), { sandbox: { mode: "none" } });
+  const staticDir = join(repo, "..", `${repo.split("/").at(-1)}-web`);
+  await mkdir(staticDir, { recursive: true });
+  await writeFile(join(staticDir, "index.html"), "<!doctype html><title>turtle</title>");
+  const scripts: FakeScript[] = [];
+  const agents: FakeAgent[] = [];
+  const server = await startServer({
+    store,
+    db,
+    config,
+    repoRoot: repo,
+    staticDir,
+    workspaceRoot: `${repo}-ws`,
+    summarizer: new HeuristicSummarizer(),
+    launcherFor: () =>
+      opts.failLaunch
+        ? async () => {
+            throw new Error("docker image turtle/runner-claude:0.1 not found");
+          }
+        : fakeLauncher(
+            async (a) => {
+              const script = scripts.shift();
+              if (!script) throw new Error("no script queued");
+              await script(a);
+            },
+            { onAgent: (a) => agents.push(a) },
+          ),
+  });
+  current = server;
+
+  const api = async <T>(path: string, init: { method?: string; body?: unknown } = {}) => {
+    const res = await fetch(`${server.url}${path}`, {
+      method: init.method ?? "GET",
+      headers:
+        init.body !== undefined ? { "content-type": "application/json", "x-turtle": "1" } : {},
+      body: init.body !== undefined ? JSON.stringify(init.body) : null,
+    });
+    const text = await res.text();
+    return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
+  };
+  const state = async () => (await api<StateResponse>("/api/state")).body;
+  const waitFor = async <T>(fn: () => Promise<T | undefined | null | false>, ms = 5000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = await fn();
+      if (v) return v;
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  };
+  const branchStatus = (id: string, status: string) =>
+    waitFor(async () => (await state()).branches.find((b) => b.id === id && b.status === status));
+  return { repo, store, db, dbPath, server, scripts, agents, api, state, waitFor, branchStatus };
+}
+
+const askScript: FakeScript = async (a) => {
+  await a.say("Looking around.");
+  await a.tool("Read", { file_path: "a.txt" });
+  await a.edit("b.txt", "b\n");
+  await a.writeFile("report.html", "<script>alert(1)</script><p>report</p>");
+  await a.checkpoint("Add b\n\nCreated b.txt.", "progress", [
+    { path: "report.html", label: "report" },
+  ]);
+  await a.edit("c.txt", "c\n");
+  await a.checkpoint("JSON or text?", "need_decision");
+  await a.finish("JSON or text?");
+};
+
+describe("turtle ui server", () => {
+  it("runs an agent from the browser and shows the tree, attention, detail, diff and transcript", async () => {
+    const t = await setup();
+    expect((await t.state()).branches).toEqual([]);
+
+    t.scripts.push(askScript);
+    const run = await t.api<RunResponse>("/api/runs", {
+      method: "POST",
+      body: { prompt: "do it" },
+    });
+    expect(run.status).toBe(201);
+    expect(run.body.mode).toBe("new");
+    await t.branchStatus(run.body.branchId, "idle");
+
+    const s = await t.state();
+    const semantic = s.nodes.filter((n) => n.kind === "semantic");
+    expect(semantic.map((n) => n.summary?.split("\n")[0])).toEqual(["Add b", "JSON or text?"]);
+    expect(s.nodes.some((n) => n.kind === "micro")).toBe(false);
+    const [first, second] = semantic;
+    expect(first?.hiddenSteps).toBeGreaterThan(0);
+    expect(second?.displayParent).toBe(first?.id);
+    expect(s.attention).toMatchObject([
+      {
+        kind: "need_decision",
+        branchId: run.body.branchId,
+        nodeId: second?.id,
+        title: "JSON or text?",
+      },
+    ]);
+    expect(s.agents[0]).toMatchObject({ status: "done", ownedByUi: false });
+    expect(s.totals.micro).toBeGreaterThan(0);
+    expect((await t.api<StateResponse>("/api/state?micro=1")).body.nodes.length).toBe(
+      s.totals.nodes,
+    );
+
+    const detail = (await t.api<NodeDetailResponse>(`/api/nodes/${first?.id}`)).body;
+    expect(detail.base?.kind).toBe("root");
+    expect(detail.steps.map((i) => i.kind)).toContain("tool_use");
+    expect(detail.steps.find((i) => i.kind === "text")).toMatchObject({ text: "Looking around." });
+    expect(detail.artifacts).toHaveLength(1);
+    expect(detail.canContinue).toBe(false);
+
+    const diff = (await t.api<DiffResponse>(`/api/nodes/${first?.id}/diff`)).body;
+    expect(diff.diff).toContain("+++ b/b.txt");
+    expect(diff.base?.kind).toBe("root");
+
+    // Artifacts are served in a sandbox so their scripts cannot call the API.
+    const art = await fetch(`${t.server.url}/api/artifacts/${detail.artifacts[0]?.id}`);
+    expect(art.headers.get("content-security-policy")).toContain("sandbox");
+    expect(await art.text()).toContain("report");
+
+    const tr = (await t.api<TranscriptResponse>(`/api/agents/${run.body.agentId}/transcript`)).body;
+    expect(tr.items.at(-1)?.kind).toBe("result");
+    const later = (
+      await t.api<TranscriptResponse>(
+        `/api/agents/${run.body.agentId}/transcript?after=${tr.lastSeq}`,
+      )
+    ).body;
+    expect(later.items).toEqual([]);
+
+    // Answer: continue the same branch from its head.
+    const head = s.branches[0]?.headNodeId as string;
+    expect((await t.api<NodeDetailResponse>(`/api/nodes/${head}`)).body.canContinue).toBe(true);
+    t.scripts.push(async (a) => {
+      await a.edit("d.txt", "json\n");
+      await a.finish("Done.");
+    });
+    const cont = await t.api<RunResponse>("/api/runs", {
+      method: "POST",
+      body: { prompt: "JSON", from: head },
+    });
+    expect(cont.body).toMatchObject({ mode: "continue", branchId: run.body.branchId });
+    await t.branchStatus(run.body.branchId, "done");
+    expect((await t.state()).attention).toEqual([]);
+
+    // Fork from the first checkpoint.
+    t.scripts.push(async (a) => {
+      await a.edit("e.txt", "text\n");
+      await a.checkpoint("Plain text instead", "done");
+      await a.finish();
+    });
+    const fork = await t.api<RunResponse>("/api/runs", {
+      method: "POST",
+      body: { prompt: "Use text", from: first?.id, name: "text" },
+    });
+    expect(fork.body.mode).toBe("fork");
+    await t.branchStatus(fork.body.branchId, "done");
+    const after = await t.state();
+    const forkNode = after.nodes.find((n) => n.summary === "Plain text instead");
+    expect(forkNode?.displayParent).toBe(first?.id);
+    expect(after.branches.find((b) => b.id === fork.body.branchId)?.name).toBe("text");
+  });
+
+  it("stops its own runs directly and runs of other processes through stop requests", async () => {
+    const t = await setup();
+    t.scripts.push(async (a) => {
+      await a.edit("x.txt", "x\n");
+      await a.waitForInterrupt();
+      await a.say("never");
+    });
+    const run = await t.api<RunResponse>("/api/runs", { method: "POST", body: { prompt: "long" } });
+    await t.waitFor(async () => (await t.state()).agents[0]?.status === "running");
+    expect((await t.state()).agents[0]?.ownedByUi).toBe(true);
+    const stop = await t.api<{ results: { via: string }[] }>(
+      `/api/branches/${run.body.branchId}/stop`,
+      { method: "POST", body: {} },
+    );
+    expect(stop.body.results[0]?.via).toBe("direct");
+    await t.branchStatus(run.body.branchId, "killed");
+
+    // `turtle stop` from another process writes a stop_request the server picks up.
+    t.scripts.push(async (a) => {
+      await a.waitForInterrupt();
+      await a.say("never");
+    });
+    const run2 = await t.api<RunResponse>("/api/runs", {
+      method: "POST",
+      body: { prompt: "long" },
+    });
+    await t.waitFor(async () =>
+      (await t.state()).agents.find((a) => a.id === run2.body.agentId && a.status === "running"),
+    );
+    const otherDb = TurtleDb.open(t.dbPath);
+    const branch = otherDb.getBranch(run2.body.branchId);
+    if (!branch) throw new Error("branch missing");
+    const results = await requestStop(t.store, otherDb, branch);
+    expect(results[0]?.via).toBe("request");
+    otherDb.close();
+    await t.branchStatus(run2.body.branchId, "killed");
+
+    const none = await t.api<{ error: string }>(`/api/branches/${run2.body.branchId}/stop`, {
+      method: "POST",
+      body: {},
+    });
+    expect(none.status).toBe(400);
+    expect(none.body.error).toMatch(/no running agent/);
+  });
+
+  it("pushes a change event when another process writes", async () => {
+    const t = await setup();
+    const res = await fetch(`${t.server.url}/api/events`);
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("no body");
+    const read = async () => new TextDecoder().decode((await reader.read()).value);
+    expect(await read()).toContain('"hello"');
+    const other = TurtleDb.open(t.dbPath);
+    other.setMeta("x", "1");
+    other.close();
+    expect(await read()).toContain('"change"');
+    await reader.cancel();
+  });
+
+  it("tags and exports nodes, with errors as 400", async () => {
+    const t = await setup();
+    t.scripts.push(async (a) => {
+      await a.edit("b.txt", "b\n");
+      await a.checkpoint("Add b", "done");
+      await a.finish();
+    });
+    const run = await t.api<RunResponse>("/api/runs", { method: "POST", body: { prompt: "b" } });
+    await t.branchStatus(run.body.branchId, "done");
+    const node = (await t.state()).nodes.find((n) => n.kind === "semantic");
+    const tag = await t.api(`/api/nodes/${node?.id}/tag`, { method: "POST", body: { name: "v1" } });
+    expect(tag.status).toBe(200);
+    expect((await t.state()).snapshots).toMatchObject([{ name: "v1", nodeId: node?.id }]);
+    const bad = await t.api<{ error: string }>(`/api/nodes/${node?.id}/tag`, {
+      method: "POST",
+      body: { name: "../x" },
+    });
+    expect(bad.status).toBe(400);
+    const exp = await t.api<{ branch: string; commit: string }>(`/api/nodes/${node?.id}/export`, {
+      method: "POST",
+      body: { branch: "feat/b" },
+    });
+    expect(exp.status).toBe(200);
+    expect(await git(["show", "feat/b:b.txt"], { cwd: t.repo })).toBe("b");
+    const dup = await t.api(`/api/nodes/${node?.id}/export`, {
+      method: "POST",
+      body: { branch: "feat/b" },
+    });
+    expect(dup.status).toBe(400);
+  });
+
+  it("records a failed launch so the attention queue explains it", async () => {
+    const t = await setup({ failLaunch: true });
+    const run = await t.api<{ error: string }>("/api/runs", {
+      method: "POST",
+      body: { prompt: "x", sandbox: "docker" },
+    });
+    expect(run.status).toBe(500);
+    expect(run.body.error).toMatch(/docker image/);
+    const s = await t.state();
+    expect(s.branches[0]?.status).toBe("failed");
+    expect(s.attention[0]).toMatchObject({
+      kind: "failed",
+      detail: expect.stringMatching(/docker/),
+    });
+  });
+
+  it("rejects foreign hosts, cross-site writes and path traversal", async () => {
+    const t = await setup();
+    const raw = (path: string, headers: Record<string, string>, method = "GET", body = "") =>
+      new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          { host: "127.0.0.1", port: t.server.port, path, method, headers },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+        req.end(body);
+      });
+    expect(await raw("/api/state", { host: "evil.example:80" })).toBe(403);
+    expect(await raw("/api/state", { host: `localhost:${t.server.port}` })).toBe(200);
+    const post = { host: `127.0.0.1:${t.server.port}`, "content-type": "application/json" };
+    expect(await raw("/api/runs", post, "POST", "{}")).toBe(403); // no x-turtle header
+    expect(
+      await raw(
+        "/api/runs",
+        { ...post, "x-turtle": "1", origin: "https://evil.example" },
+        "POST",
+        "{}",
+      ),
+    ).toBe(403);
+    expect(
+      await raw(
+        "/api/runs",
+        { ...post, "x-turtle": "1", "content-type": "text/plain" },
+        "POST",
+        "{}",
+      ),
+    ).toBe(415);
+    expect(await raw("/api/runs", { ...post, "x-turtle": "1" }, "POST", "{}")).toBe(400);
+
+    const res = await fetch(`${t.server.url}/..%2f..%2f..%2fetc%2fpasswd`);
+    expect(await res.text()).toContain("<title>turtle</title>");
+    expect((await fetch(`${t.server.url}/some/route`)).status).toBe(200);
+  });
+});

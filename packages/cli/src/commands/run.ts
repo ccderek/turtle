@@ -7,6 +7,7 @@ import {
   FallbackSummarizer,
   HeuristicSummarizer,
   noneLauncher,
+  pidFileFor,
   type RunEvent,
   type RunnerLauncher,
   type RunOptions,
@@ -40,6 +41,22 @@ export function launcherFor(mode: SandboxMode, config: TurtleConfig): RunnerLaun
     extraArgs: config.sandbox.dockerArgs ?? [],
     forwardEnv: config.sandbox.forwardEnv ?? [],
   });
+}
+
+/**
+ * Agents run with their own CLAUDE_CONFIG_DIR, so a `claude` login kept in the macOS
+ * Keychain is not visible to them: credentials must come from the environment.
+ */
+export function credentialHint(sandbox: SandboxMode, env = process.env): string | null {
+  const vars = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+  ];
+  if (vars.some((v) => env[v])) return null;
+  return `no Claude credentials in the environment (${sandbox} sandbox): set CLAUDE_CODE_OAUTH_TOKEN (from \`claude setup-token\`) or ANTHROPIC_API_KEY`;
 }
 
 export function summarizerFor(config: TurtleConfig, warn: (msg: string) => void): Summarizer {
@@ -140,6 +157,9 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
     }
   };
 
+  const hint = credentialHint(sandbox);
+  if (hint) print(c.yellow(hint));
+
   const session = await RunSession.start(
     {
       store,
@@ -152,7 +172,7 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
     opts,
   );
 
-  const pidFile = join(store.turtleDir, "run", `${session.agentId}.pid`);
+  const pidFile = pidFileFor(store, session.agentId);
   await mkdir(join(store.turtleDir, "run"), { recursive: true });
   await writeFile(pidFile, String(process.pid));
   const onSignal = () => session.interrupt();

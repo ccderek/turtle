@@ -384,15 +384,19 @@ export class TurtleDb {
       this.raw
         .prepare("SELECT * FROM artifacts WHERE node_id = ? ORDER BY rowid")
         .all(nodeId) as Row[]
-    ).map((r) => ({
-      id: String(r.id),
-      nodeId: String(r.node_id),
-      label: str(r.label),
-      path: str(r.path),
-      blobSha: String(r.blob_sha),
-      mime: str(r.mime),
-      size: num(r.size),
-    }));
+    ).map(toArtifact);
+  }
+
+  getArtifact(id: string): Artifact | null {
+    const row = this.raw.prepare("SELECT * FROM artifacts WHERE id = ?").get(id) as Row | undefined;
+    return row ? toArtifact(row) : null;
+  }
+
+  /** Changes whenever any connection commits (cheap change detection for live views). */
+  changeToken(): string {
+    const dataVersion = this.raw.pragma("data_version", { simple: true });
+    const own = (this.raw.prepare("SELECT total_changes() AS n").get() as Row).n;
+    return `${dataVersion}:${own}`;
   }
 
   // ------------------------------------------------------------- snapshots
@@ -538,5 +542,17 @@ function toEvent(r: Row): TurtleEvent {
     nodeId: str(r.node_id),
     agentId: str(r.agent_id),
     payload: JSON.parse(String(r.payload)) as Record<string, unknown>,
+  };
+}
+
+function toArtifact(r: Row): Artifact {
+  return {
+    id: String(r.id),
+    nodeId: String(r.node_id),
+    label: str(r.label),
+    path: str(r.path),
+    blobSha: String(r.blob_sha),
+    mime: str(r.mime),
+    size: num(r.size),
   };
 }

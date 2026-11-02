@@ -1,4 +1,4 @@
-import type { TurtleDb, TurtleNode } from "@turtle/core";
+import { checkpointOf, diffBaseOf, type TurtleDb, type TurtleNode } from "@turtle/core";
 import { type Context, resolveBranch, resolveNode, shortIds } from "../context.js";
 import {
   ago,
@@ -154,12 +154,7 @@ export async function showCommand(
   }
 
   if (o.diff) {
-    // Semantic nodes diff against the previous checkpoint; others against their parent.
-    let parent = n.parents[0] ? db.getNode(n.parents[0]) : null;
-    if (n.kind === "semantic") {
-      while (parent && parent.kind === "micro")
-        parent = parent.parents[0] ? db.getNode(parent.parents[0]) : null;
-    }
+    const parent = diffBaseOf(db, n);
     const fromTree = parent?.treeSha ?? (await store.emptyTree());
     out.push(
       "",
@@ -237,8 +232,7 @@ export function statusCommand(ctx: Context): string[] {
   const attention: string[] = [];
   for (const b of db.listBranches()) {
     if (b.status === "running" || !b.headNodeId) continue;
-    let n = db.getNode(b.headNodeId);
-    while (n && n.kind === "micro") n = n.parents[0] ? db.getNode(n.parents[0]) : null;
+    const n = checkpointOf(db, db.getNode(b.headNodeId));
     if (n && (n.status === "need_decision" || n.status === "blocked")) {
       attention.push(
         `  ${statusColor(n.status)(n.status.padEnd(14))} ${c.bold(short(n.id))}  ${truncate(firstLine(n.summary), 60)}  ${c.dim(`[${short(b.id)}]`)}`,

@@ -9,8 +9,10 @@
       "@turtle/protocol": ["./packages/protocol/src/index.ts"],
       "@turtle/core": ["./packages/core/src/index.ts"],
       "@turtle/runner-claude": ["./packages/runner-claude/src/index.ts"],
-      "@turtle/cli": ["./packages/cli/src/index.ts"]
+      "@turtle/cli": ["./packages/cli/src/index.ts"],
+      "@turtle/server": ["./packages/server/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "vitest.config.ts"],
+  "exclude": ["packages/web"]
 }

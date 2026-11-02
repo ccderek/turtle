@@ -10,6 +10,7 @@ export default defineConfig({
       "@turtle/protocol": pkg("protocol"),
       "@turtle/core": pkg("core"),
       "@turtle/runner-claude": pkg("runner-claude"),
+      "@turtle/server": pkg("server"),
       "@turtle/cli": pkg("cli"),
     },
   },

@@ -1,18 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   CONFIG_FILE,
   DEFAULT_CONFIG,
+  exportNode,
   newId,
+  OpsError,
   reconcile,
+  requestStop,
   runGit,
-  SNAPSHOT_REF_PREFIX,
-  type TurtleNode,
+  tagNode,
 } from "@turtle/core";
 import { CliError, type Context, resolveBranch, resolveNode, shortIds } from "../context.js";
-import { c, firstLine } from "../render.js";
+import { c } from "../render.js";
+import { credentialHint } from "./run.js";
 
 // ------------------------------------------------------------------- init
 
@@ -65,77 +68,24 @@ export async function checkoutCommand(ctx: Context, ref: string, dir?: string): 
 // -------------------------------------------------------------------- tag
 
 export async function tagCommand(ctx: Context, ref: string, name: string): Promise<string[]> {
-  if (!/^[\w.-]+$/.test(name)) throw new CliError(`invalid snapshot name: ${name}`);
   const n = resolveNode(ctx.db, ref);
-  const refName = `${SNAPSHOT_REF_PREFIX}${name}`;
-  const old = await ctx.store.readRef(refName);
-  await ctx.store.updateRef(refName, n.commitSha, old);
-  ctx.db.transaction(() => {
-    ctx.db.putSnapshot(name, n.id);
-    const tags = n.tags.includes("snapshot") ? n.tags : [...n.tags, "snapshot"];
-    ctx.db.updateNode(n.id, { tags });
-    ctx.db.appendEvent({
-      actorType: "human",
-      actorId: null,
-      type: "tag",
-      branchId: n.branchId,
-      nodeId: n.id,
-      agentId: null,
-      payload: { name, moved: Boolean(old) },
-    });
-  });
-  return [`snapshot ${c.bold(name)} → ${n.id}${old ? " (moved)" : ""}`];
+  const { moved } = await opsCall(() => tagNode(ctx.store, ctx.db, n, name));
+  return [`snapshot ${c.bold(name)} → ${n.id}${moved ? " (moved)" : ""}`];
 }
 
 // ----------------------------------------------------------------- export
-
-/** Semantic nodes from the original root to `n`, oldest first (crossing fork points). */
-function semanticPath(ctx: Context, n: TurtleNode): { path: TurtleNode[]; root: TurtleNode } {
-  const path: TurtleNode[] = [];
-  let cur: TurtleNode | null = n;
-  let root: TurtleNode = n;
-  while (cur) {
-    if (cur.kind === "semantic") path.push(cur);
-    root = cur;
-    cur = cur.parents[0] ? ctx.db.getNode(cur.parents[0]) : null;
-  }
-  return { path: path.reverse(), root };
-}
 
 export async function exportCommand(
   ctx: Context,
   ref: string,
   o: { branch: string; message?: string },
 ): Promise<string[]> {
-  const { store, db } = ctx;
-  const n = resolveNode(db, ref);
-  const branchRef = `refs/heads/${o.branch}`;
-  const check = await runGit(["check-ref-format", branchRef], { okCodes: [0, 1] });
-  if (check.exitCode !== 0) throw new CliError(`invalid branch name: ${o.branch}`);
-  if (await store.readRef(branchRef)) throw new CliError(`branch ${o.branch} already exists`);
-
-  const { path, root } = semanticPath(ctx, n);
-  const rootCommit = await store.readCommit(root.commitSha);
-  const base = rootCommit.parents[0];
-  const title = o.message ?? firstLine(n.summary) ?? "turtle export";
-  const body = path.map((p) => `- ${firstLine(p.summary)}`).join("\n");
-  const message = `${title}\n\n${body ? `${body}\n\n` : ""}Turtle-Export: ${n.id}\n`;
-  const identity = await store.userIdentity();
-  const commit = await store.commitTree(n.treeSha, base ? [base] : [], message, identity);
-  await store.updateRef(branchRef, commit, null);
-  db.appendEvent({
-    actorType: "human",
-    actorId: null,
-    type: "export",
-    branchId: n.branchId,
-    nodeId: n.id,
-    agentId: null,
-    payload: { branch: o.branch, commit },
-  });
+  const n = resolveNode(ctx.db, ref);
+  const r = await opsCall(() => exportNode(ctx.store, ctx.db, n, o));
   const out = [
-    `exported ${n.id} as branch ${c.bold(o.branch)} (${commit.slice(0, 10)}, one commit on ${base?.slice(0, 10) ?? "no parent"})`,
+    `exported ${n.id} as branch ${c.bold(r.branch)} (${r.commit.slice(0, 10)}, one commit on ${r.base?.slice(0, 10) ?? "no parent"})`,
   ];
-  if (root.summary?.includes("uncommitted")) {
+  if (r.includesUncommitted) {
     out.push(
       c.yellow("note: the run started from uncommitted changes; they are part of this commit"),
     );
@@ -147,21 +97,20 @@ export async function exportCommand(
 
 export async function stopCommand(ctx: Context, branchRef: string): Promise<string[]> {
   const b = resolveBranch(ctx.db, branchRef);
-  const agents = ctx.db.listAgents({ branchId: b?.id ?? "", status: "running" });
-  if (!agents.length) throw new CliError(`branch ${branchRef} has no running agent`);
-  const out: string[] = [];
-  for (const a of agents) {
-    const pidFile = join(ctx.store.turtleDir, "run", `${a.id}.pid`);
-    const pid = existsSync(pidFile) ? Number(await readFile(pidFile, "utf8")) : a.pid;
-    if (!pid) continue;
-    try {
-      process.kill(pid, "SIGINT");
-      out.push(`interrupt sent to agent ${a.id} (pid ${pid})`);
-    } catch (err) {
-      out.push(c.red(`could not signal pid ${pid}: ${(err as Error).message}`));
-    }
+  if (!b) throw new CliError(`unknown branch: ${branchRef}`);
+  const results = await opsCall(() => requestStop(ctx.store, ctx.db, b));
+  return results.map((r) =>
+    r.via === "none" ? c.red(`agent ${r.agentId}: ${r.detail}`) : `agent ${r.agentId}: ${r.detail}`,
+  );
+}
+
+async function opsCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof OpsError) throw new CliError(err.message);
+    throw err;
   }
-  return out;
 }
 
 // --------------------------------------------------------------------- gc
@@ -226,6 +175,8 @@ export async function doctorCommand(ctx: Context): Promise<{ lines: string[]; ok
   }
   await mkdir(store.turtleDir, { recursive: true });
   out.push(`${db.listBranches().length} branches, ${nodes.length} nodes checked`);
+  const hint = credentialHint(ctx.config.sandbox.mode);
+  out.push(hint ? c.yellow(`! ${hint}`) : c.dim("Claude credentials found in the environment"));
   out.push(...problems.map((p) => c.red(`✗ ${p}`)));
   out.push(
     problems.length

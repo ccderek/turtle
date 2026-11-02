@@ -1,6 +1,6 @@
 # turtle — Phase 0 Spec: Record
 
-> Status: implemented (M0–M7); M8 (dogfooding against the exit criteria) is next. Parent document: [architecture.md](./architecture.md).
+> Status: implemented (M0–M7); Phase 1 builds on it ([phase1-spec.md](./phase1-spec.md)); M8 (dogfooding against the exit criteria) is next. Parent document: [architecture.md](./architecture.md).
 > Items marked **VERIFY** are assumptions about external tools to confirm during implementation.
 
 ---

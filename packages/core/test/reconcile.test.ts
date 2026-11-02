@@ -160,4 +160,39 @@ describe("reconcile", () => {
       failedAgents: ["a1"],
     });
   });
+
+  it("leaves branches with a live writer alone until that process is gone", async () => {
+    const { store, db, ref, root, ws, indexFile } = await setup();
+    await reconcile(store, db); // import root + branch
+    db.insertAgent({
+      id: "a1",
+      branchId: "b1",
+      adapter: "claude-agent-sdk",
+      adapterLevel: 2,
+      model: null,
+      sandbox: "none",
+      sessionId: null,
+      prompt: "p",
+      status: "running",
+      pid: 4242,
+    });
+    // The writer moved the ref but has not inserted the row yet.
+    await writeFiles(ws, { "c.txt": "c\n" });
+    await store.snapshot({
+      workTree: ws,
+      indexFile,
+      parent: { commit: root.commit, tree: root.tree },
+      message: {
+        title: "micro: after Write",
+        trailers: { "Turtle-Node": "micro0000000", "Turtle-Kind": "micro", "Turtle-Branch": "b1" },
+      },
+      identity: AGENT_IDENTITY,
+      allowUnchanged: false,
+      ref: { name: ref, expectedOld: root.commit },
+    });
+    expect((await reconcile(store, db, { isProcessAlive: () => true })).importedNodes).toEqual([]);
+    const report = await reconcile(store, db, { isProcessAlive: () => false });
+    expect(report.importedNodes).toEqual(["micro0000000"]);
+    expect(report.failedAgents).toEqual(["a1"]);
+  });
 });

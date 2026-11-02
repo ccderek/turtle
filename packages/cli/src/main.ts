@@ -12,6 +12,7 @@ import {
   tagCommand,
 } from "./commands/manage.js";
 import { type RunCliOptions, runCommand } from "./commands/run.js";
+import { DEFAULT_UI_PORT, type UiOptions, uiCommand } from "./commands/ui.js";
 import { CliError, openContext } from "./context.js";
 import { c } from "./render.js";
 
@@ -49,6 +50,16 @@ program
   .option("-v, --verbose", "also show micro snapshots and the agent's messages")
   .action(async (prompt: string, o: RunCliOptions) => {
     process.exitCode = await runCommand(await openContext(cwd()), prompt, o);
+  });
+
+program
+  .command("ui")
+  .description("open the web UI: live tree, what needs you, diffs, and start/answer/fork/stop runs")
+  .option("-p, --port <port>", `port on 127.0.0.1 (default ${DEFAULT_UI_PORT}; 0 = any free port)`)
+  .option("--no-open", "do not open a browser")
+  .option("--demo-agent", "scripted agents instead of Claude (no credentials needed)")
+  .action(async (o: UiOptions) => {
+    process.exitCode = await uiCommand(await openContext(cwd()), o);
   });
 
 program

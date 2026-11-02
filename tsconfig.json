@@ -1,9 +1,20 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/protocol" },
-    { "path": "packages/core" },
-    { "path": "packages/runner-claude" },
-    { "path": "packages/cli" }
+    {
+      "path": "packages/protocol"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/runner-claude"
+    },
+    {
+      "path": "packages/server"
+    },
+    {
+      "path": "packages/cli"
+    }
   ]
 }

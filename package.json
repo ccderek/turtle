@@ -7,8 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "build": "tsc -b && pnpm --filter @turtle/web build",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json && tsc -p packages/web",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
@@ -17,7 +17,9 @@
     "demo": "pnpm build && node scripts/demo.mjs",
     "e2e": "pnpm build && node scripts/e2e-real.mjs",
     "docker:build": "pnpm build && node scripts/docker-build.mjs",
-    "docker:smoke": "node scripts/docker-smoke.mjs"
+    "docker:smoke": "node scripts/docker-smoke.mjs",
+    "demo:ui": "pnpm build && node scripts/demo.mjs --ui",
+    "ui:smoke": "node scripts/ui-smoke.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

@@ -40,12 +40,24 @@ export async function reconcile(
   opts: { isProcessAlive?: (pid: number) => boolean } = {},
 ): Promise<ReconcileReport> {
   const report: ReconcileReport = { importedNodes: [], createdBranches: [], failedAgents: [] };
+  const alive = opts.isProcessAlive ?? isProcessAlive;
+  const activeAgents = [
+    ...db.listAgents({ status: "running" }),
+    ...db.listAgents({ status: "starting" }),
+  ];
+  // Branches with a live writer are skipped: that process may have moved the ref and not
+  // yet inserted the row (docs/phase1-spec.md §3.2).
+  const liveBranches = new Set(
+    activeAgents.filter((a) => a.pid !== null && alive(a.pid)).map((a) => a.branchId),
+  );
   const refs = [
     ...(await store.listRefs(BRANCH_REF_PREFIX)),
     ...(await store.listRefs(SNAPSHOT_REF_PREFIX)),
   ];
 
   for (const { ref, sha } of refs) {
+    if (ref.startsWith(BRANCH_REF_PREFIX) && liveBranches.has(ref.slice(BRANCH_REF_PREFIX.length)))
+      continue;
     const missing: ParsedCommit[] = [];
     for await (const commit of walk(store, sha)) {
       const trailers = parseNodeMessage(commit.message).trailers;
@@ -68,11 +80,7 @@ export async function reconcile(
     }
   }
 
-  const alive = opts.isProcessAlive ?? isProcessAlive;
-  for (const agent of [
-    ...db.listAgents({ status: "running" }),
-    ...db.listAgents({ status: "starting" }),
-  ]) {
+  for (const agent of activeAgents) {
     if (agent.pid === null || !alive(agent.pid)) {
       db.updateAgent(agent.id, { status: "failed", endedAt: new Date().toISOString() });
       const branch = db.getBranch(agent.branchId);

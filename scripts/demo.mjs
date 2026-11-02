@@ -1,6 +1,6 @@
 // Offline demo (no API key): builds a small tree with a scripted agent, then shows it with
-// the real `turtle` CLI. Usage: pnpm demo
-import { spawnSync } from "node:child_process";
+// the real `turtle` CLI. Usage: pnpm demo   (or `pnpm demo:ui` to open it in the web UI)
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,12 @@ await git(["-c", "user.name=demo", "-c", "user.email=demo@x", "commit", "-q", "-
   cwd: repo,
 });
 
+// The demo agent needs no sandbox; keep the config out of the snapshots.
+await writeFile(
+  join(repo, "turtle.config.json"),
+  `${JSON.stringify({ sandbox: { mode: "none" } })}\n`,
+);
+await writeFile(join(repo, ".git", "info", "exclude"), "turtle.config.json\n");
 const store = await GitStore.open(repo);
 const db = TurtleDb.open(join(store.turtleDir, "turtle.db"));
 const config = mergeConfig(structuredClone(DEFAULT_CONFIG), {
@@ -97,20 +103,37 @@ await run(
   { from: decl.id, name: "format-flag" },
 );
 
-const turtle = (...args) => {
-  console.log(`\n$ turtle ${args.join(" ")}`);
-  const r = spawnSync(process.execPath, [cli, "-C", repo, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, FORCE_COLOR: "1" },
+if (process.argv.includes("--ui")) {
+  db.close();
+  console.log(
+    `demo repo: ${repo}\nstarting the web UI with a scripted demo agent (Ctrl-C to stop)…`,
+  );
+  const extra = process.argv.slice(process.argv.indexOf("--ui") + 1);
+  const child = spawn(process.execPath, [cli, "-C", repo, "ui", "--demo-agent", ...extra], {
+    stdio: "inherit",
   });
-  process.stdout.write(r.stdout + r.stderr);
-};
-turtle("log");
-turtle("status");
-const firstShort = decl.id.slice(0, 6);
-turtle("show", firstShort, "--diff");
-turtle("tag", firstShort, "json-flag-v1");
-turtle("export", db.getBranch(first.s.branchId).headNodeId.slice(0, 6), "--branch", "feat/json");
-turtle("stats");
-turtle("doctor");
-console.log(`\ndemo repo: ${repo}  (try: node ${cli} -C ${repo} log --all)`);
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+  child.on("exit", (code) => process.exit(code ?? 0));
+} else {
+  showWithCli();
+}
+
+function showWithCli() {
+  const turtle = (...args) => {
+    console.log(`\n$ turtle ${args.join(" ")}`);
+    const r = spawnSync(process.execPath, [cli, "-C", repo, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, FORCE_COLOR: "1" },
+    });
+    process.stdout.write(r.stdout + r.stderr);
+  };
+  turtle("log");
+  turtle("status");
+  const firstShort = decl.id.slice(0, 6);
+  turtle("show", firstShort, "--diff");
+  turtle("tag", firstShort, "json-flag-v1");
+  turtle("export", db.getBranch(first.s.branchId).headNodeId.slice(0, 6), "--branch", "feat/json");
+  turtle("stats");
+  turtle("doctor");
+  console.log(`\ndemo repo: ${repo}  (try: node ${cli} -C ${repo} log --all)`);
+}
