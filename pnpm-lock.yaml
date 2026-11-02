@@ -32,12 +32,18 @@ importers:
 
   packages/core:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^1.3.0
+        version: 1.3.0(zod@4.6.7)
       '@turtle/protocol':
         specifier: workspace:*
         version: link:../protocol
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^9.6.0
