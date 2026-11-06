@@ -2,7 +2,7 @@
 
 A human–AI interface and version-control layer for AI coding agents: every step an agent takes becomes a checkpoint in a tree you can inspect, fork, and steer.
 
-Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented. Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
+Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented; next is the task graph, a mind map of tasks shared by humans and agents (architecture v0.2, §3.1). Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
 
 ![turtle ui](docs/images/ui-question.png)
 

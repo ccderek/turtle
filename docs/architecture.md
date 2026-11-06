@@ -1,6 +1,6 @@
-# turtle — Architecture Design (Draft v0.1)
+# turtle — Architecture Design (Draft v0.2)
 
-> Status: under discussion, not yet implemented. Items marked `TODO` are open questions.
+> Status: Phases 0–1 implemented ([phase0-spec.md](./phase0-spec.md), [phase1-spec.md](./phase1-spec.md)). v0.2 adds the **task graph** (§3.1): turtle becomes an agent-native project management tool, where humans and agents share a mind map of tasks and the code tree is its evidence layer. Items marked `TODO` are open questions.
 
 ---
 
@@ -20,6 +20,7 @@ Build a new human–AI interface that lets a human:
 - Run multiple AIs **in parallel** while controlling every branch (fork / merge / kill / redirect / snapshot).
 - On any branch, manually ask the AI to **explore more alternatives** and compare them.
 - **Reduce overall token usage** through the right implementation choices.
+- (v0.2) Plan and track the work as a **shared task graph**: humans and agents both add tasks, and every task shows its status, owner and evidence at a glance (§3.1).
 
 ## 3. Core Idea: Two Trees
 
@@ -30,6 +31,56 @@ Build a new human–AI interface that lets a human:
 
 **turtle's core value is linking the two trees**: every code snapshot can answer "which intent did this come from, and what was the context at the time?"
 
+Phases 0–1 built the code tree and kept the intent only as one summary per checkpoint. Using it showed the gap: a human still has to read summaries and diffs and assemble "what is the AI doing, and how far along is it?" in their head. v0.2 makes the intent tree a first-class object: the task graph.
+
+### 3.1 The task graph (v0.2)
+
+**Decision (D15): turtle is an agent-native project management tool.** Its primary object is a **task graph**, drawn as a mind map, that humans and agents both edit. Each task can be assigned to an agent, and the work it does lands on a code branch. The checkpoints, diffs and artifacts on that branch are the task's evidence.
+
+```
+Layer           Holds                                                  Stored in              Rewindable
+──────────────  ─────────────────────────────────────────────────────  ─────────────────────  ──────────────────────
+Concept         goal, tasks, findings, decisions, questions, outputs   SQLite + git ref       yes (versioned, op log)
+Code            files at every checkpoint                              git (refs/turtle/*)    yes
+Environment     how to rebuild the machine: Dockerfiles, setup scripts part of the code layer  yes, as code (D4)
+External        devices, databases, cloud services                     resources + ledger     no: side effects marked
+```
+
+Concept kinds are deliberately few:
+
+| Kind | What it is | Who usually adds it |
+|---|---|---|
+| **goal** | What the human wants, in their words; the root of a graph | Human |
+| **task** | A unit of work. It has a status, an assignee (agent or human), dependencies, the resources it needs, and where it starts from | Both: the agent splits a goal; the human adds, edits, reorders or drops tasks |
+| **finding** | A fact learned while working ("3.2 W, 45 ms per inference") | Agent, with evidence |
+| **decision** | A choice made, and by whom ("3 runs × 5 min, cooldown 2 min") | Human answering a question, or agent |
+| **question** | Something only the human can decide; it blocks the task it belongs to | Agent |
+| **output** | A produced file: small ones are artifacts in git, large ones (model binaries, traces) live outside git and are recorded by path + sha256 | Agent |
+
+Rules:
+
+- **Claim vs evidence.** Every finding and every `done` carries evidence links (a checkpoint, an artifact, an output, a test result). Without them it is shown as *claimed*, never as verified.
+- **Both sides edit; every edit is an event.** Human edits are instructions to the agents. Examples: drop a task, change a dependency, edit a decision, add "Model C reusing the environment". The agent working on an affected task is told at its next tool boundary (redirect, §8). Agent edits go through MCP tools, which are cheap structured calls like `turtle_checkpoint`:
+  - `turtle_task` creates or updates a task;
+  - `turtle_finding`, `turtle_decision` and `turtle_question` record the other concept kinds.
+- **The graph is the main screen (D18).** The code tree is a drill-down from a task.
+- **Reuse is explicit.** A task can start *from* another task's checkpoint ("Model B reuses the environment task"). This is a fork (§8): the new task inherits the files and the conversation up to that point.
+
+Worked example (from the first user scenario): measuring a model's power and performance on a phone.
+
+```
+Goal: measure power/performance of model A (then B)
+├── Environment: connect phone, lock clocks      agent α   done      out: env/phone-setup.sh
+├── Compile model A                              agent β   done      out: model_a.bin (outside git)
+├── Test plan                                    agent α   done      decision: 3 runs × 5 min (you)
+├── Measure model A  ← needs all three ↑        agent δ   running   holds Pixel-1
+│   ├── finding: 3.2 W · 45 ms/inference          evidence: results/model-a.csv
+│   └── record trace (perfetto)                            running
+└── Model B  (starts from "Environment")        agent γ   waiting   queued for Pixel-1
+    ├── compile with another toolchain                     done
+    └── decision: per-layer CSV output
+```
+
 ### Glossary
 
 - **Node**: a checkpoint — one commit plus intent/process metadata.
@@ -37,6 +88,9 @@ Build a new human–AI interface that lets a human:
 - **Semantic checkpoint**: a meaningful milestone (declared by the AI or triggered by a rule); shown in the UI by default.
 - **Exploration Group**: the set of sibling branches produced by one `explore` operation.
 - **Snapshot (human-tagged)**: a node a human marks to keep and reuse.
+- **Concept**: an item in the task graph (goal, task, finding, decision, question, output).
+- **Task**: a concept that is a unit of work, assignable to an agent; its work runs on a code branch.
+- **Resource**: something outside the code that tasks share and that cannot be rewound (a phone, a test database); it has a lock and a queue.
 
 ---
 
@@ -118,13 +172,52 @@ interface Node {
   createdAt: string;
 }
 
+// v0.2 — the task graph (§3.1)
+type ConceptKind = "goal" | "task" | "finding" | "decision" | "question" | "output";
+
+interface Concept {
+  id: string;
+  kind: ConceptKind;
+  title: string;
+  body: string;
+  parentId: string | null;     // mind-map hierarchy: goal → task → subtask / finding / …
+  version: number;             // every edit is an event and bumps the version
+  author: { type: "agent" | "human"; id: string };
+  evidence: { nodeId?: NodeId; artifactId?: string; outputId?: string }[];
+  // tasks only
+  status?: "todo" | "ready" | "running" | "waiting" | "need_decision" | "blocked" | "done" | "dropped";
+  assignee?: { type: "agent" | "human"; id: string } | null;
+  dependsOn?: string[];        // task ids; a task is ready when all are done
+  resources?: string[];        // resource ids it must hold while running
+  startFrom?: { taskId: string; nodeId: NodeId } | null;  // reuse: fork from that checkpoint
+  branchId?: string | null;    // the code branch where its work lands
+}
+
+interface Resource {           // shared, not rewindable (§10)
+  id: string;
+  name: string;                // "Pixel-1"
+  kind: "device" | "service" | "other";
+  capacity: number;            // usually 1
+  holders: string[];           // task ids
+  queue: string[];             // task ids waiting, in order
+}
+
+interface Output {             // large produced files, kept outside git
+  id: string;
+  taskId: string;
+  path: string;                // e.g. ~/perf-results/model-a/trace.perfetto
+  sha256: string;
+  size: number;
+}
+
 interface Event {              // like jj's operation log; append-only
   id: string;
   at: string;
   actor: { type: "agent" | "human" | "system"; id: string };
   type:
     | "tool_call" | "checkpoint" | "fork" | "explore" | "kill"
-    | "redirect" | "human_edit" | "merge" | "tag" | "rebase" | "gc";
+    | "redirect" | "human_edit" | "merge" | "tag" | "rebase" | "gc"
+    | "concept_create" | "concept_update" | "task_assign" | "resource_acquire" | "resource_release";
   payload: unknown;
 }
 ```
@@ -213,6 +306,10 @@ Taken automatically after every tool call, hidden by default, used for fine-grai
 | **human_edit(node)** | The human's change becomes a node (author = human). Running downstream agents rebase onto it at their next tool boundary, **and the human's change is injected into the agent's context** so the agent does not revert it |
 | **merge(a, b)** | Itself an agent task that produces a merge node and must run tests (handles semantic conflicts). Conflicts may be stored on the node and resolved later |
 | **tag snapshot(node)** | Mark to keep; exempt from GC; reusable |
+| **add task(parent, title, deps?, startFrom?)** | Human or agent adds a task to the graph. With `startFrom`, the task forks from that checkpoint when it starts |
+| **assign(task, agent \| human)** | Start an agent on the task (new branch, or continue its branch), or mark it as the human's |
+| **answer(question)** | Records a decision and unblocks the question's task (today: continue from a need_decision node) |
+| **edit / drop(concept)** | Human edits are instructions: the agent on an affected task is redirected at its next tool boundary |
 | **export(node)** | Turn the root→node path into clean git history (optionally squashed) as a normal branch / PR |
 
 ### Compare view
@@ -249,6 +346,8 @@ Side benefit: transcripts can be converted to a neutral format so **a different 
 | Database schema out of sync with rolled-back code | One disposable DB per worktree (SQLite file / Postgres template clone / container), rebuilt from seed |
 | Irreversible external side effects (email, payments, push, cloud resources) | Intercept and require human confirmation |
 | Untracked files (`.env`, build outputs) | Explicit snapshot policy; secrets never enter snapshots |
+| Large outputs (model binaries, traces of hundreds of MB) | Never snapshotted: written outside the workspace or under ignored paths, recorded as **outputs** (path + sha256) on the task (§3.1) |
+| Shared physical devices and services (a phone, a test DB) | Modeled as **resources** with a lock and a queue; a task declares what it needs and waits its turn. Nodes that touched a resource are marked "has external side effects", and a fork from them warns that the device is not rewound |
 | Rebuilding the environment *via AI* costs tokens and is non-deterministic | Have the AI write **deterministic scripts** into the repo; run the scripts afterwards |
 
 ### Local containers
@@ -362,7 +461,23 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 
 15. Who decides to spawn parallel agents? If the AI can branch on its own, it needs budget / depth caps.
 16. GC policy for throwaway branches and transcripts. `TODO`
-17. Positioning vs existing tools (Claude Code checkpoint/rewind, subagents, Cursor background agents, etc.). `TODO`
+17. Positioning vs existing tools (Claude Code checkpoint/rewind, subagents, Cursor background agents, etc.). With v0.2 also vs project management tools (Linear, Jira): turtle's tasks are executed by agents, carry evidence, and are versioned with the code. `TODO`
+
+### Task graph (v0.2)
+
+18. **The graph drifts from reality.** The agent's claims and its actions diverge. Mitigations:
+    - evidence links on every finding and every `done` (§3.1);
+    - findings without evidence are shown as *claimed*;
+    - at automatic checkpoints, a small model checks the graph against the tool calls.
+19. **Graph noise.** Agents may add too many tiny tasks and findings. Mitigations:
+    - per-checkpoint limits on new concepts;
+    - findings fold under their task;
+    - the human can merge or drop nodes.
+20. **Concurrent edits.** Human and agent may edit the same concept. Concepts are versioned and the human's edit wins; the agent is told at its next tool boundary.
+21. **Combining parallel work.** A task that depends on several parallel tasks needs their results:
+    - outputs pass by path, so they need no merge;
+    - code from several branches needs a merge (§8), with conflicts going to a merge agent or the human. `TODO` for the Phase 3 spec.
+22. **Scheduling.** Dependency cycles are rejected. Resource waits and parallelism caps need to be visible, or the human cannot tell "waiting" from "stuck".
 
 ---
 
@@ -372,8 +487,9 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 |---|---|---|
 | **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
 | **1 Web UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream, plus the Phase 0 actions (run / answer / fork / stop / tag / export). Spec: [phase1-spec.md](./phase1-spec.md) | Can a human keep up with the AI? |
-| **2 Control** | kill / fork / redirect / human_edit / tag snapshot | Timing and semantics of intervention |
-| **3 Explore & merge** | explore (Plan → select → Execute), compare view, merge agent, export to git, sharing failed attempts across branches, token optimization | Value and cost of parallel exploration |
+| **2 Task graph** | Concept store (goal / task / finding / decision / question / output) + MCP tools for agents + **mind map as the main screen**. Humans add, edit and drop tasks; a task is assigned to one agent and its work lands on a branch (start from any task's checkpoint = fork). Answering questions, stopping and redirecting happen from the graph. Code tree becomes the drill-down | Does a shared task graph let a human follow and steer the work? Does the agent keep it truthful? |
+| **3 Parallel tasks** | Scheduler: tasks start when dependencies are done, within a parallelism cap. Resources with locks and queues. Outputs stored outside git. Combining upstream work (outputs by path, code via merge agent). Agents may add and start subtasks under budget and depth caps | Value and cost of running tasks in parallel |
+| **4 Explore & compare** | explore (Plan → select → Execute) as sibling tasks, compare view, sharing failed attempts across tasks, human_edit with downstream rebase, token optimization | Value and cost of exploring alternatives |
 
 ---
 
@@ -395,13 +511,21 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D12 | UI transport | HTTP for commands, Server-Sent Events for pushes; the server detects changes by polling SQLite `data_version`, so runs in other processes show up live |
 | D13 | Phase 1 scope | The web UI also exposes the actions the Phase 0 CLI already had (run, answer/continue, fork, stop, tag, export); `turtle ui` is itself an orchestrator for runs started from the browser |
 | D14 | UI security | Loopback only; Host check against DNS rebinding; writes require a custom header + JSON (forced CORS preflight, never approved); artifacts served in a CSP sandbox |
+| D15 | Product shape | An agent-native project management tool: a task graph (mind map) shared by humans and agents; the code tree is its evidence layer (§3.1) |
+| D16 | Who edits the graph | Both. Agents through MCP tools, humans in the UI; every edit is a versioned event, and human edits act as instructions |
+| D17 | What a node is | A task is a unit of work: assignable to an agent, with dependencies and resources; its work runs on a code branch |
+| D18 | Main screen | The mind map; the code tree is a drill-down from a task |
+| D19 | Non-code state | D4 stands: environment as code, no container snapshots. External devices and services are resources (lock + queue + side-effect marks); large outputs live outside git, recorded by path + sha256 |
 
 ## 17. TODO
 
-- [ ] **Q4**: concrete user scenarios (to walk the data flow end-to-end and validate the architecture)
+- [x] **Q4**: concrete user scenarios → first one: measuring a model's power/performance on a phone (§3.1)
 - [ ] User scope: individual vs team (currently assuming individual)
 - [ ] GC policy for throwaway branches / transcripts
 - [x] Node.js vs Bun → Node.js (D9)
 - [ ] Positioning vs existing tools
 - [x] Detailed Phase 0 spec → [phase0-spec.md](./phase0-spec.md)
 - [x] Phase 1 spec → [phase1-spec.md](./phase1-spec.md); manual test guide → [tutorial.md](./tutorial.md)
+- [x] Task-graph direction (v0.2, D15–D19); validated with a clickable mind-map prototype of the phone scenario
+- [ ] Phase 2 spec (task graph): storage of concepts (SQLite + a git ref so the DB stays rebuildable), MCP tool shapes, migration of Phase 0–1 branches into tasks, mind-map layout
+- [ ] Single user vs team: a project management tool invites several humans on one graph
