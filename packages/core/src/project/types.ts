@@ -1,0 +1,114 @@
+/** Task graph types (docs/phase2-spec.md §5–§6, architecture §3.5). */
+
+export type ConceptKind = "goal" | "task" | "finding" | "decision" | "question" | "output";
+
+export const CONCEPT_KINDS: readonly ConceptKind[] = [
+  "goal",
+  "task",
+  "finding",
+  "decision",
+  "question",
+  "output",
+];
+
+export type TaskStatus =
+  | "todo"
+  | "running"
+  | "paused"
+  | "need_decision"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "dropped";
+
+export type Actor =
+  | { type: "member"; id: string }
+  | { type: "agent"; id: string; onBehalfOf: string };
+
+export interface StartFrom {
+  taskId: string;
+  checkpointId: string;
+}
+
+/** Fields a concept carries; which ones apply depends on `kind`. */
+export interface ConceptFields {
+  kind: ConceptKind;
+  parentId: string | null;
+  title: string;
+  body?: string;
+  // task
+  status?: TaskStatus;
+  assignee?: { type: "agent" } | { type: "member"; id: string } | null;
+  dependsOn?: string[];
+  sources?: string[];
+  resources?: string[];
+  startFrom?: StartFrom | null;
+  brief?: string;
+  // question
+  options?: string[];
+  answer?: { text: string; by: string; at: string } | null;
+  // output
+  path?: string;
+  sha256?: string;
+  size?: number;
+  // ordering among siblings
+  order?: string;
+}
+
+export type ConceptField = Exclude<keyof ConceptFields, "kind">;
+
+export interface Concept extends ConceptFields {
+  id: string;
+  /** Number of operations applied to this concept. */
+  version: number;
+  dropped: boolean;
+  createdBy: Actor;
+  createdAt: string;
+  updatedAt: string;
+  /** Per field: the version that last set it and who. Drives stale-edit checks. */
+  fieldMeta: Partial<Record<ConceptField, { v: number; by: Actor }>>;
+}
+
+export type LinkRel = "evidence" | "provenance" | "reuses";
+
+export interface LinkTarget {
+  type: "checkpoint" | "node" | "artifact" | "output" | "concept" | "message";
+  id: string;
+}
+
+export interface Link {
+  id: string;
+  from: string;
+  rel: LinkRel;
+  to: LinkTarget;
+  createdBy: Actor;
+  createdAt: string;
+  removed: boolean;
+}
+
+export type Change =
+  | { kind: "create"; id: string; fields: ConceptFields }
+  | { kind: "set"; id: string; fields: Partial<Omit<ConceptFields, "kind">>; base: number }
+  | { kind: "drop"; id: string; base: number }
+  | { kind: "restore"; id: string }
+  | { kind: "link"; id: string; from: string; rel: LinkRel; to: LinkTarget }
+  | { kind: "unlink"; id: string };
+
+/** One immutable change; the unit of the operation log. */
+export interface Operation {
+  /** sha256 of the canonical JSON of every other field. */
+  id: string;
+  /** `${memberId}/${replicaId}`. */
+  replica: string;
+  /** Per-replica sequence number, 1, 2, 3, … */
+  seq: number;
+  /** Version vector: highest seq seen per replica when this was written. */
+  deps: Record<string, number>;
+  actor: Actor;
+  at: string;
+  change: Change;
+}
+
+export function actorLabel(a: Actor): string {
+  return a.type === "member" ? a.id : `${a.id} for ${a.onBehalfOf}`;
+}

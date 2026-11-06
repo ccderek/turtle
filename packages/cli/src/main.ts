@@ -11,6 +11,12 @@ import {
   stopCommand,
   tagCommand,
 } from "./commands/manage.js";
+import {
+  projectAddSourceCommand,
+  projectCreateCommand,
+  projectRebuildCommand,
+  projectShowCommand,
+} from "./commands/project.js";
 import { type RunCliOptions, runCommand } from "./commands/run.js";
 import { DEFAULT_UI_PORT, type UiOptions, uiCommand } from "./commands/ui.js";
 import { CliError, openContext } from "./context.js";
@@ -51,6 +57,35 @@ program
   .action(async (prompt: string, o: RunCliOptions) => {
     process.exitCode = await runCommand(await openContext(cwd()), prompt, o);
   });
+
+const project = program
+  .command("project")
+  .description("turtle projects: the task graph above your repositories");
+project
+  .command("create")
+  .description("create a project (its own git repository) and attach code repositories")
+  .argument("<dir>")
+  .option("-s, --source <repo...>", "code repositories to attach")
+  .option("--name <name>", "project name (default: the directory name)")
+  .action(async (dir: string, o: { source?: string[]; name?: string }) =>
+    print(await projectCreateCommand(cwd(), dir, o)),
+  );
+project
+  .command("add-source")
+  .description("attach another code repository")
+  .argument("<repo>")
+  .option("--id <id>", "short name for the source")
+  .action(async (repo: string, o: { id?: string }) =>
+    print(await projectAddSourceCommand(cwd(), repo, o)),
+  );
+project
+  .command("show")
+  .description("the project, its sources and graph size")
+  .action(async () => print(await projectShowCommand(cwd())));
+project
+  .command("rebuild")
+  .description("rebuild the graph view from the operation log")
+  .action(async () => print(await projectRebuildCommand(cwd())));
 
 program
   .command("ui")

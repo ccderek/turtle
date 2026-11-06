@@ -8,6 +8,7 @@ import {
   exportNode,
   newId,
   OpsError,
+  Project,
   reconcile,
   requestStop,
   runGit,
@@ -38,6 +39,9 @@ export async function initCommand(ctx: Context): Promise<string[]> {
     if (!dockerOk)
       out.push(c.yellow("docker not found: agents run as plain child processes (--sandbox none)"));
   }
+  const project = await Project.ensureForRepo(ctx.store);
+  out.push(`project: ${project.dir} (${project.config.sources.length} source)`);
+  project.close();
   out.push("", `next: ${c.bold('turtle run "<task>"')}`);
   return out;
 }
