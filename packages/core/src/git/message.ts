@@ -11,6 +11,8 @@ export const TRAILER_KEYS = [
   "Turtle-Agent",
   "Turtle-Summary-Source",
   "Turtle-Trigger",
+  /** Multi-source runs: the primary node this companion snapshot belongs to. */
+  "Turtle-Checkpoint",
 ] as const;
 
 export type TrailerKey = (typeof TRAILER_KEYS)[number];

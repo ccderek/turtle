@@ -209,8 +209,17 @@ The current version of a concept is the number of operations applied to it.
 
 - **One source** (the usual case and every Phase 0–1 repository): the workspace is the materialized source itself, exactly as in Phase 0, so the agent's cwd is the repository root.
 - **Several sources:** the workspace is `~/.turtle/workspaces/<project>/<task>/`, with one subdirectory per source the task uses (`scripts/`, `models/`). The agent's cwd is that directory, and the system prompt lists the subdirectories.
-- **A checkpoint** is a row `checkpoints(id, task_id, at)` plus one Phase 0 node per touched source (`checkpoint_parts(checkpoint_id, source_id, node_id)`). Sources whose tree did not change still get a part pointing at their previous node, so a checkpoint always names the full state.
-- **`RunSession` generalization.** It gains `sources: { id, store, db?, branch, workspace }[]`. Each tool boundary snapshots every source (unchanged trees are skipped cheaply by `write-tree` comparison). Rules and summaries operate on the combined diff.
+- **Primary and companions (as built in M3).** The repository the run is driven from is the *primary* source. It keeps the conversation, resume points and summaries, exactly as in Phase 0. Every other source is a *companion* (`core/run/companion.ts`) with its own branch in its own repository.
+  - At every primary node, companions are snapshotted first. A change in any source makes a checkpoint: a micro snapshot is taken even when only a companion changed.
+  - A semantic checkpoint always includes every companion.
+  - Companion nodes carry the trailer `Turtle-Checkpoint: <primary node id>`, and the primary node's `checkpoint` event lists the parts.
+  - **The checkpoint id is the primary node id.** Its full state is resolved by walking the primary's ancestors and taking, for each companion, the nearest part recorded (`resolveCheckpointParts`). A micro checkpoint records only the sources that changed.
+  - **Stats are combined.** Rules, automatic summaries and the agent's `turtle_diff` see all sources, with paths prefixed by the source directory (`models/m.txt`).
+- **A branch keeps its layout.** A branch created single-source continues single-source even after the project gains sources; a new run or a fork picks up all sources.
+  - **Continue:** companion branches are found from the primary branch's `run_start` events.
+  - **Fork:** each companion forks from its part at the fork checkpoint.
+- **Live-writer marking.** Each companion branch gets an agent row (adapter `companion`, the orchestrator's pid), so a reconcile in another process leaves it alone.
+- **Not yet multi-source:** `turtle export` and the Phase 1 code view work on the primary source only, until M7/M8.
 
 ### 7.2 Starting a task
 

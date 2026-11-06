@@ -7,6 +7,8 @@ import {
   FallbackSummarizer,
   HeuristicSummarizer,
   noneLauncher,
+  openRunSources,
+  Project,
   pidFileFor,
   type RunEvent,
   type RunnerLauncher,
@@ -160,6 +162,17 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
   const hint = credentialHint(sandbox);
   if (hint) print(c.yellow(hint));
 
+  // In a project with several sources, the run works in all of them (phase2-spec §7.1).
+  const project = await Project.find(ctx.cwd);
+  const sources = await openRunSources(project, store.topLevel ?? ctx.cwd);
+  if (sources.companions.length && sources.primaryId) {
+    opts.companions = sources.companions;
+    opts.primarySourceId = sources.primaryId;
+    print(
+      c.dim(`  sources: ${[sources.primaryId, ...sources.companions.map((s) => s.id)].join(", ")}`),
+    );
+  }
+
   const session = await RunSession.start(
     {
       store,
@@ -182,6 +195,8 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
     const outcome = await session.done;
     return outcome.reason === "failed" ? 1 : outcome.reason === "killed" ? 130 : 0;
   } finally {
+    sources.close();
+    project?.close();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await rm(pidFile, { force: true });

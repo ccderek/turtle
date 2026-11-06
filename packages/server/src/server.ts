@@ -7,6 +7,7 @@ import {
   exportNode,
   type GitStore,
   OpsError,
+  openRunSources,
   type Project,
   RefConflictError,
   type RunEvent,
@@ -157,6 +158,11 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
         log(`[${agentId.slice(0, 6)}] ${e.message}`);
       }
     };
+    const sources = await openRunSources(o.project ?? null, o.repoRoot);
+    if (sources.companions.length && sources.primaryId) {
+      opts.companions = sources.companions;
+      opts.primarySourceId = sources.primaryId;
+    }
     let session: RunSession;
     try {
       session = await RunSession.start(
@@ -172,6 +178,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
         opts,
       );
     } catch (err) {
+      sources.close();
       const msg = (err as Error).message;
       if (/is running; use --fork/.test(msg))
         throw new HttpError(409, "that branch is running; fork from it instead");
@@ -183,6 +190,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
     sessions.set(session.agentId, session);
     log(`run ${session.agentId} started on branch ${session.branchId} (${session.mode})`);
     void session.done.then(async (outcome) => {
+      sources.close();
       sessions.delete(session.agentId);
       await rm(ownerFile, { force: true });
       log(

@@ -228,8 +228,15 @@ export class GitStore {
   }
 
   /** Unified diff between two trees, optionally limited to paths. */
-  async diff(fromTree: string, toTree: string, paths: readonly string[] = []): Promise<string> {
-    const args = ["diff-tree", "-r", "-p", "--no-renames", "--no-color", fromTree, toTree];
+  async diff(
+    fromTree: string,
+    toTree: string,
+    paths: readonly string[] = [],
+    opts: { prefix?: string } = {},
+  ): Promise<string> {
+    const args = ["diff-tree", "-r", "-p", "--no-renames", "--no-color"];
+    if (opts.prefix) args.push(`--src-prefix=a/${opts.prefix}/`, `--dst-prefix=b/${opts.prefix}/`);
+    args.push(fromTree, toTree);
     if (paths.length > 0) args.push("--", ...paths);
     const { stdout } = await runGit(args, { gitDir: this.commonDir });
     return stdout.toString("utf8");

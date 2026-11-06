@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cp, stat as fsStat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type {
   CheckpointReply,
   CheckpointRequest,
@@ -28,8 +28,15 @@ import type {
   TurtleNode,
 } from "../db/types.js";
 import type { Trailers } from "../git/message.js";
-import { AGENT_IDENTITY, BRANCH_REF_PREFIX, type GitStore } from "../git/store.js";
+import { AGENT_IDENTITY, BRANCH_REF_PREFIX, type DiffStat, type GitStore } from "../git/store.js";
 import { newId } from "../ids.js";
+import {
+  type CheckpointPart,
+  Companion,
+  companionBranches,
+  resolveCheckpointParts,
+  type SourceHandle,
+} from "./companion.js";
 import {
   checkpointReplyMessage,
   contextPrefix,
@@ -57,6 +64,14 @@ export interface RunOptions {
   sandbox?: SandboxMode;
   model?: string;
   maxBudgetUsd?: number;
+  /**
+   * More source repositories for a multi-source run (docs/phase2-spec.md §7.1). The
+   * workspace becomes a directory with one subdirectory per source, and every
+   * checkpoint snapshots all of them.
+   */
+  companions?: SourceHandle[];
+  /** Subdirectory name of the primary source in a multi-source workspace. */
+  primarySourceId?: string;
 }
 
 export interface RunDeps {
@@ -182,6 +197,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private readonly resumeUuidByTool = new Map<string, string>();
   /** Checkpoint tool calls seen in assistant messages but not yet answered: id → summary. */
   private readonly pendingCheckpointTools = new Map<string, string>();
+  /** Agent cwd: the primary workspace, or the directory holding every source's. */
+  private root = "";
+  private companions: Companion[] = [];
+  private primaryId = "main";
 
   private constructor(
     private readonly deps: RunDeps,
@@ -218,6 +237,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     let workspace: string;
     let resume: Pick<RunnerStartOptions, "resume" | "resumeSessionAt" | "forkSession"> = {};
     let promptPrefix = "";
+    const multiWanted = (opts.companions?.length ?? 0) > 0;
+    const primaryId = opts.primarySourceId ?? "main";
+    let multi = false;
+    let rootDir = "";
 
     if (!opts.from) {
       mode = "new";
@@ -238,7 +261,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         identity: await store.userIdentity(),
         fromHead: opts.fromHead ?? false,
       });
-      workspace = join(workspaceRoot, branchId);
+      multi = multiWanted;
+      rootDir = join(workspaceRoot, branchId);
+      workspace = multi ? join(rootDir, primaryId) : rootDir;
       const headLabel = root.head ? root.head.slice(0, 7) : "(no commits)";
       branch = db.transaction(() => {
         const b = db.insertBranch({
@@ -281,6 +306,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         branch = fromBranch;
         headNode = from;
         workspace = fromBranch.workspacePath ?? join(workspaceRoot, fromBranch.id);
+        // A branch keeps the layout it was created with.
+        multi = multiWanted && companionBranches(db, fromBranch.id).size > 0;
+        rootDir = multi ? dirname(workspace) : workspace;
         if (!(await exists(workspace))) {
           await store.materialize(from.commitSha, workspace, store.indexFileFor(branch.id));
           await copyIgnored(store.topLevel, workspace, config.workspace.copyIgnored);
@@ -296,7 +324,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         const branchId = newId();
         const ref = `${BRANCH_REF_PREFIX}${branchId}`;
         await store.updateRef(ref, from.commitSha, null);
-        workspace = join(workspaceRoot, branchId);
+        multi = multiWanted;
+        rootDir = join(workspaceRoot, branchId);
+        workspace = multi ? join(rootDir, primaryId) : rootDir;
         branch = db.insertBranch({
           id: branchId,
           name: opts.name ?? null,
@@ -317,7 +347,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
             forkSession: true,
           };
           // The resumed conversation may mention the old workspace's absolute paths.
-          if (sandbox === "none") promptPrefix = workspaceMovedNote(workspace);
+          if (sandbox === "none") promptPrefix = workspaceMovedNote(rootDir);
         }
       }
       if (!resume.resume && from.kind !== "root") {
@@ -337,6 +367,55 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       status: "starting",
       pid: process.pid,
     });
+    // A long-lived host (turtle ui) stays alive, so reconcile would never mark this agent
+    // dead: record a failure to start right away.
+    const companions: Companion[] = [];
+    const recordStartFailure = (err: unknown) => {
+      const error = err instanceof Error ? err.message : String(err);
+      for (const c of companions) c.finish("failed", "failed");
+      db.transaction(() => {
+        db.updateAgent(agentId, { status: "failed", endedAt: new Date().toISOString() });
+        db.updateBranch(branch.id, { status: "failed" });
+        db.appendEvent({
+          actorType: "system",
+          actorId: null,
+          type: "run_end",
+          branchId: branch.id,
+          nodeId: headNode.id,
+          agentId,
+          payload: { agentId, branchId: branch.id, reason: "failed", error },
+        });
+      });
+    };
+    if (multi) {
+      try {
+        const known =
+          mode === "continue" ? companionBranches(db, branch.id) : new Map<string, string>();
+        const parts =
+          mode === "fork"
+            ? resolveCheckpointParts(db, headNode.id)
+            : new Map<string, CheckpointPart>();
+        for (const src of opts.companions ?? []) {
+          const c = await Companion.start(src, {
+            root: rootDir,
+            agentId,
+            prompt: opts.prompt,
+            sandbox,
+            fromHead: opts.fromHead ?? false,
+            continueBranchId: known.get(src.id) ?? null,
+            fromNodeId: parts.get(src.id)?.nodeId ?? null,
+            checkpointId: headNode.id,
+          });
+          companions.push(c);
+          if (mode !== "continue")
+            await copyIgnored(src.store.topLevel, c.workTree, config.workspace.copyIgnored);
+        }
+      } catch (err) {
+        recordStartFailure(err);
+        throw err;
+      }
+    }
+
     db.appendEvent({
       actorType: "human",
       actorId: null,
@@ -349,10 +428,20 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         prompt: opts.prompt,
         resumed: Boolean(resume.resume),
         maxBudgetUsd: opts.maxBudgetUsd ?? config.agent.maxBudgetUsd ?? null,
+        ...(multi
+          ? {
+              primarySource: primaryId,
+              companions: companions.map((c) => ({ source: c.id, branchId: c.branch.id })),
+              parts: companions.map((c) => c.headPart),
+            }
+          : {}),
       },
     });
 
     const session = new RunSession(deps, opts, mode, branch, agentId, workspace);
+    session.root = rootDir;
+    session.companions = companions;
+    session.primaryId = primaryId;
     session.head = { nodeId: headNode.id, commit: headNode.commitSha, tree: headNode.treeSha };
     const sem = lastSemanticAncestor(db, headNode);
     session.lastSemantic = {
@@ -393,29 +482,14 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       transport = await deps.launcher({
         agentId,
         branchId: branch.id,
-        workspace,
+        workspace: rootDir,
         sandbox,
         claudeConfigDir: join(store.turtleDir, "claude"),
         logFile: join(store.turtleDir, "logs", `${agentId}.log`),
         env: {},
       });
     } catch (err) {
-      // A long-lived host (turtle ui) stays alive, so reconcile would never mark this agent
-      // dead: record the failure now.
-      const error = err instanceof Error ? err.message : String(err);
-      db.transaction(() => {
-        db.updateAgent(agentId, { status: "failed", endedAt: new Date().toISOString() });
-        db.updateBranch(branch.id, { status: "failed" });
-        db.appendEvent({
-          actorType: "system",
-          actorId: null,
-          type: "run_end",
-          branchId: branch.id,
-          nodeId: headNode.id,
-          agentId,
-          payload: { agentId, branchId: branch.id, reason: "failed", error },
-        });
-      });
+      recordStartFailure(err);
       throw err;
     }
     session.transport = transport;
@@ -622,7 +696,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       });
     }
     if (!turtleTool && !this.finalized) {
-      const stat = await this.deps.store.diffStat(this.lastSemantic.tree, this.head.tree);
+      const stat = addStats(
+        await this.deps.store.diffStat(this.lastSemantic.tree, this.head.tree),
+        ...(await Promise.all(this.companions.map((c) => c.statSinceCheckpoint()))),
+      );
       const rule = evaluateRules(
         {
           toolCalls: this.toolCallsSinceSemantic,
@@ -656,8 +733,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     });
     if (!node) throw new Error("checkpoint was not recorded");
     for (const a of req.artifacts ?? []) {
-      const abs = resolve(this.workspace, a.path);
-      if (abs !== this.workspace && !abs.startsWith(this.workspace + sep)) {
+      const abs = resolve(this.root, a.path);
+      if (abs !== this.root && !abs.startsWith(this.root + sep)) {
         this.log("warn", `artifact outside workspace ignored: ${a.path}`);
         continue;
       }
@@ -667,7 +744,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         db.insertArtifact({
           nodeId: node.id,
           label: a.label ?? null,
-          path: relative(this.workspace, abs),
+          path: relative(this.root, abs),
           blobSha,
           mime: null,
           size: info.size,
@@ -693,6 +770,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private async onDiff(since: string | undefined, path: string | undefined): Promise<DiffReply> {
     const { db, store } = this.deps;
     let fromTree: string;
+    let fromParts: Map<string, CheckpointPart> | null = null;
     if (!since || since === "branch_start") {
       fromTree = db.getNode(this.branch.rootNodeId)?.treeSha ?? (await store.emptyTree());
     } else if (since === "last_checkpoint") {
@@ -701,8 +779,35 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       const n = db.getNode(since) ?? db.findNodesByPrefix(since, 2).at(0);
       if (!n) throw new Error(`unknown node ${since}`);
       fromTree = n.treeSha;
+      if (this.companions.length) fromParts = resolveCheckpointParts(db, n.id);
     }
-    const diff = await store.diff(fromTree, this.head.tree, path ? [path] : []);
+    const prefixOf = (id: string) => (this.companions.length ? { prefix: id } : {});
+    // In a multi-source workspace, paths start with the source's directory.
+    const pathFor = (id: string): string[] => {
+      if (!path) return [];
+      if (!this.companions.length) return [path];
+      return path === id || path.startsWith(`${id}/`) ? [path.slice(id.length + 1) || "."] : [];
+    };
+    const wanted = (id: string) =>
+      !path || !this.companions.length || path === id || path.startsWith(`${id}/`);
+    let diff = wanted(this.primaryId)
+      ? await store.diff(
+          fromTree,
+          this.head.tree,
+          pathFor(this.primaryId),
+          prefixOf(this.primaryId),
+        )
+      : "";
+    for (const c of this.companions) {
+      if (!wanted(c.id)) continue;
+      const from =
+        !since || since === "branch_start"
+          ? c.rootTree
+          : since === "last_checkpoint"
+            ? c.checkpointTree
+            : (fromParts?.get(c.id)?.tree ?? c.rootTree);
+      diff += await c.source.store.diff(from, c.headTree, pathFor(c.id), prefixOf(c.id));
+    }
     const truncated = diff.length > MAX_DIFF_CHARS;
     return {
       diff: truncated
@@ -733,20 +838,35 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         "Turtle-Trigger": p.trigger,
       };
       if (p.summarySource) trailers["Turtle-Summary-Source"] = p.summarySource;
+      // Companions first: a change in any source makes this a checkpoint.
+      const parts: { part: CheckpointPart; stat: DiffStat }[] = [];
+      for (const c of this.companions) {
+        const r = await c.snapshot({
+          checkpointId: id,
+          kind: p.kind,
+          title: p.title,
+          ...(p.body ? { body: p.body } : {}),
+          status: p.status,
+          trigger: p.trigger,
+          allowUnchanged: p.allowUnchanged,
+        });
+        if (r) parts.push(r);
+      }
       const res = await store.snapshot({
         workTree: this.workspace,
         indexFile: store.indexFileFor(this.branchId),
         parent: { commit: this.head.commit, tree: this.head.tree },
         message: p.body ? { title: p.title, body: p.body, trailers } : { title: p.title, trailers },
         identity: AGENT_IDENTITY,
-        allowUnchanged: p.allowUnchanged,
+        allowUnchanged: p.allowUnchanged || parts.length > 0,
         ref: { name: this.branch.ref, expectedOld: this.head.commit },
       });
       if (!res) return null;
       const { tokens, costUsd } = this.usage.drain();
       // Semantic nodes report changes since the previous checkpoint, micro nodes since their parent.
-      const stat =
+      const own =
         p.kind === "semantic" ? await store.diffStat(this.lastSemantic.tree, res.tree) : res.stat;
+      const stat = addStats(own, ...parts.map((x) => x.stat));
       const summary = p.kind === "micro" ? p.title : p.body ? `${p.title}\n\n${p.body}` : p.title;
       const node = db.transaction(() => {
         const n = db.insertNode(
@@ -790,6 +910,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
             trigger: p.trigger,
             snapshotMs: Math.round(res.durationMs),
             ...p.eventPayload,
+            ...(parts.length ? { parts: parts.map((x) => x.part) } : {}),
           },
         });
         return n;
@@ -841,20 +962,41 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
 
   private async summaryInput(trigger: string): Promise<SummaryInput> {
     const { store } = this.deps;
-    const from = this.lastSemantic.tree;
-    const to = this.head.tree;
-    const [stat, diff, names] = await Promise.all([
-      store.diffStat(from, to),
-      store.diff(from, to),
-      from === to
-        ? Promise.resolve("")
-        : store.run(["diff-tree", "-r", "--name-only", "--no-renames", from, to]),
-    ]);
+    const sides = [
+      {
+        store,
+        from: this.lastSemantic.tree,
+        to: this.head.tree,
+        prefix: this.companions.length ? this.primaryId : "",
+      },
+      ...this.companions.map((c) => ({
+        store: c.source.store,
+        from: c.checkpointTree,
+        to: c.headTree,
+        prefix: c.id,
+      })),
+    ];
+    const per = await Promise.all(
+      sides.map(async (x) => {
+        const [stat, diff, names] = await Promise.all([
+          x.store.diffStat(x.from, x.to),
+          x.store.diff(x.from, x.to, [], x.prefix ? { prefix: x.prefix } : {}),
+          x.from === x.to
+            ? Promise.resolve("")
+            : x.store.run(["diff-tree", "-r", "--name-only", "--no-renames", x.from, x.to]),
+        ]);
+        const paths = names
+          ? names.split("\n").map((n) => (x.prefix ? `${x.prefix}/${n}` : n))
+          : [];
+        return { stat, diff, paths };
+      }),
+    );
+    const diff = per.map((x) => x.diff).join("");
     return {
       intent: this.opts.prompt,
       trigger,
-      stat,
-      changedPaths: names ? names.split("\n") : [],
+      stat: addStats(...per.map((x) => x.stat)),
+      changedPaths: per.flatMap((x) => x.paths),
       diff: diff.length > SUMMARY_DIFF_CHARS ? `${diff.slice(0, SUMMARY_DIFF_CHARS)}\n…` : diff,
       toolCalls: this.toolLog.slice(-50),
       lastAssistantText: this.lastAssistantText,
@@ -943,6 +1085,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       sessionId: this.sessionId,
     });
     db.updateBranch(this.branchId, { status: branchStatus });
+    for (const c of this.companions) c.finish(branchStatus, agentStatus);
     const outcome: RunOutcome = {
       agentId: this.agentId,
       branchId: this.branchId,
@@ -1080,3 +1223,14 @@ function errorMessage(err: unknown): string {
 }
 
 export type { CheckpointStatus };
+
+function addStats(...stats: DiffStat[]): DiffStat {
+  return stats.reduce(
+    (a, b) => ({
+      filesChanged: a.filesChanged + b.filesChanged,
+      linesAdded: a.linesAdded + b.linesAdded,
+      linesDeleted: a.linesDeleted + b.linesDeleted,
+    }),
+    { filesChanged: 0, linesAdded: 0, linesDeleted: 0 },
+  );
+}
