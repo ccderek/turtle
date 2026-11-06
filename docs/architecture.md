@@ -1,6 +1,14 @@
-# turtle — Architecture Design (Draft v0.2)
+# turtle — Architecture Design (Draft v0.3)
 
-> Status: Phases 0–1 implemented ([phase0-spec.md](./phase0-spec.md), [phase1-spec.md](./phase1-spec.md)). v0.2 adds the **task graph** (§3.1): turtle becomes an agent-native project management tool, where humans and agents share a mind map of tasks and the code tree is its evidence layer. Items marked `TODO` are open questions.
+> Status: Phases 0–1 implemented ([phase0-spec.md](./phase0-spec.md), [phase1-spec.md](./phase1-spec.md)).
+> - v0.2 added the **task graph** (§3.1). turtle becomes an agent-native project management tool: humans and agents share a mind map of tasks, and the code tree is its evidence layer.
+> - v0.3 makes turtle a general, multi-user version system for intent, not bound to any code repository:
+>   - a **turtle project** sits above repositories (§3.2);
+>   - it syncs local-first like git (§3.3);
+>   - it has roles and runners (§3.4);
+>   - it is built on a small core (§3.5).
+>
+> Items marked `TODO` are open questions.
 
 ---
 
@@ -21,6 +29,25 @@ Build a new human–AI interface that lets a human:
 - On any branch, manually ask the AI to **explore more alternatives** and compare them.
 - **Reduce overall token usage** through the right implementation choices.
 - (v0.2) Plan and track the work as a **shared task graph**: humans and agents both add tasks, and every task shows its status, owner and evidence at a glance (§3.1).
+
+### 2.1 Does the design still answer the motivation? (v0.3 review)
+
+| Observation (§1) | Answered by | Status |
+|---|---|---|
+| 1. Output outpaces human attention | Mind map as main screen, attention queue, claim vs evidence, batched notifications | Designed; **not yet validated** (Phase 1 manual test pending) |
+| 2. Many agents, throwaway work, non-determinism | Tasks, branches, fork, parallel scheduling | Scheduling in Phase 3 |
+| 3. AI misreads intent; requirements keep shifting | Questions, decision nodes, human edits as instructions | Pivots are kept as decisions, unlike Phases 0–1 |
+| 4. Linear interface, tree-shaped work | Mind map + code tree | Fits |
+| 5. No real-time correction; interventions unversioned | Stop, redirect, every edit a versioned event | **Redirect must ship in Phase 2.** It was deferred in each re-plan, yet it is the original pain |
+
+Course corrections adopted in v0.3:
+
+1. **Validate before infrastructure.** Multi-user sync, permissions and a server are heavy, and they do not differentiate turtle. The core hypothesis comes first: a shared task graph lets one human follow and steer many agents. So Phase 4 (multi-user) starts only after Phase 2 passes measurable criteria (§15).
+2. **Keep the core small (D27).** git is universal because its core is tiny (objects + refs). turtle's core is concepts, operations and evidence links. Assignment, notifications, scheduling and permissions sit on top. Without that, turtle becomes another ever-growing tracker.
+3. **Do not drop two original goals.**
+   - Exploring alternatives (D2) moves into Phase 3: with a scheduler, "explore N approaches" is just N sibling tasks.
+   - Token use becomes a metric every phase reports. The graph should reduce it, through shared findings (no repeated exploration), reuse and early kills.
+4. **The graph's truthfulness is measured, not assumed.** Phase 2 measures how well the graph agrees with what agents actually did.
 
 ## 3. Core Idea: Two Trees
 
@@ -81,6 +108,79 @@ Goal: measure power/performance of model A (then B)
     └── decision: per-layer CSV output
 ```
 
+### 3.2 A turtle project sits above repositories (v0.3)
+
+**Decision (D23):** turtle versions intent, not code, so it is not bound to a code repository. A **turtle project** is its own repository. It holds the task graph, its operation log, members and settings. Code repositories, resources and an output store are **attached** to it.
+
+```
+turtle project "perf-lab"            (a git repository of its own: graph + op log)
+├── task graph and operation log
+├── members, roles, runners
+└── attached sources
+    ├── git repo A  (measurement scripts)   ← tasks open branches here
+    ├── git repo B  (models, compile config)
+    ├── resources: Pixel-1, Pixel-2
+    └── output store (traces, binaries; outside git)
+```
+
+- **A task touches zero, one or several repositories.** A research task may only produce outputs.
+- **A checkpoint becomes a set of per-repository snapshots** taken together: one commit in A and one in B form one checkpoint. A fork restores all of them.
+- **Export is per repository:** a branch or PR in each repository the task changed.
+- **The Phase 0–1 code becomes the per-repository code-layer engine** (snapshot, materialize, fork, resume), driven by the project. `.git/turtle/` inside a code repository becomes that repository's cache.
+
+### 3.3 Many people: local-first, synced like git (v0.3)
+
+**Decision (D24):** every member (and every machine) has a full replica of the project. Replicas sync through a remote, like git, so work is offline-capable and fast locally.
+
+- **The operation log is stored as git objects.** Each replica appends to its own ref, `refs/turtle/ops/<member>/<replica>`, so a push never conflicts on a ref.
+- **The graph is the merge of all logs**, in the manner of a CRDT and of jj's operation log.
+- **Two edits to the same field are surfaced as a conflict for a human.** They are never silently overwritten.
+- **Execution facts win over edits.** Status reported by the running agent overrides concurrent field edits.
+- **First sync target: any git remote.** A plain repository on GitHub gives multi-user access with the remote's permissions.
+- **Later: a turtle server** (Phase 5) for live share links, per-node permissions, comments from people without turtle, and shared runners.
+
+### 3.4 Roles, sharing, agents and runners (v0.3)
+
+| Role | Can |
+|---|---|
+| Owner | Everything, including members and roles |
+| Editor | Add and edit tasks, start agents, instruct agents directly |
+| Commenter | Comment and make requests; a request becomes an instruction once the task's owner accepts it |
+| Viewer | Read |
+
+- **Roles apply to the whole project or to a subtree.** Sharing a node means granting a role on its subtree (D25).
+- **The node is the unit of sharing (D22).**
+  - Each node has a **brief** that the agent keeps current: goal, status and conclusion first, then findings and decisions with evidence links, then open questions and next steps.
+  - The brief replaces separately written status documents: people read the live node instead of a copy.
+  - Transcripts, environment variables and local paths are excluded from what is shared by default.
+  - Until there is a server, a node can be exported as a self-contained page (a static snapshot).
+- **An agent always acts on behalf of one member (D26).** It uses that member's runner and model credentials, and pays with that member's account. It is recorded as "agent α for derek".
+  - Only editors start agents.
+  - Instructions from others reach the agent through sync.
+  - A **runner** is a machine that executes agents: a member's laptop, or a shared lab machine with the phones attached. The lab machine accepts tasks from members allowed to use it.
+- **Agent-created tasks start immediately (D21).** Humans are notified instead of asked:
+  - new nodes are flagged until seen;
+  - notifications are batched ("α added 3 subtasks");
+  - every new task offers Pause and Drop;
+  - budget, parallelism and depth caps queue the excess, and the UI says why it is queued.
+
+### 3.5 The core object model (v0.3)
+
+**Decision (D27):** like git's objects and refs, turtle's core is small, and everything else is built on it.
+
+| Core object | Role |
+|---|---|
+| **Concept** | A goal, task, finding, decision, question or output, with its fields (§5) |
+| **Operation** | One immutable change to concepts, signed by an actor (a member, or an agent for a member), with causal parents; the log is append-only |
+| **Link** | Evidence and provenance: concept → checkpoint (per-repo commits), artifact, output, other concept |
+| **Checkpoint** | A set of per-repository commits taken together (the code layer, §4) |
+
+On top, not in the core:
+- scheduling, resources and runners;
+- notifications, the UI and briefs;
+- permissions enforcement;
+- agent adapters.
+
 ### Glossary
 
 - **Node**: a checkpoint — one commit plus intent/process metadata.
@@ -91,6 +191,10 @@ Goal: measure power/performance of model A (then B)
 - **Concept**: an item in the task graph (goal, task, finding, decision, question, output).
 - **Task**: a concept that is a unit of work, assignable to an agent; its work runs on a code branch.
 - **Resource**: something outside the code that tasks share and that cannot be rewound (a phone, a test database); it has a lock and a queue.
+- **turtle project**: the repository of intent: task graph, operation log, members; code repositories are attached to it.
+- **Replica**: one member's copy of a project on one machine; replicas sync through a remote.
+- **Runner**: a machine that executes agents on behalf of members.
+- **Brief**: a node's living, shareable summary, kept current by the agent.
 
 ---
 
@@ -208,6 +312,33 @@ interface Output {             // large produced files, kept outside git
   path: string;                // e.g. ~/perf-results/model-a/trace.perfetto
   sha256: string;
   size: number;
+}
+
+// v0.3 — projects, members, sync
+interface Project {
+  id: string;
+  name: string;                // "perf-lab"
+  sources: { id: string; kind: "git"; url: string; defaultBranch: string }[];
+  resources: Resource[];
+  outputStore: { kind: "local" | "object-store"; location: string };
+}
+
+interface Member { id: string; name: string; roles: { scope: "project" | string /* subtree root concept id */; role: "owner" | "editor" | "commenter" | "viewer" }[] }
+
+interface Runner { id: string; owner: string; name: string; allowedMembers: string[]; resources: string[] /* attached devices */ }
+
+interface Operation {          // the core log entry; replaces Event for concept changes
+  id: string;                  // content hash
+  replica: string;             // `${memberId}/${machineId}`
+  actor: { type: "member"; id: string } | { type: "agent"; id: string; onBehalfOf: string };
+  parents: string[];           // causal: the last operations this replica had seen
+  at: string;
+  change: { concept: string; set?: Record<string, unknown>; create?: Partial<Concept>; drop?: true };
+}
+
+interface Checkpoint {         // code layer: one commit per touched repository
+  id: NodeId;
+  commits: { sourceId: string; commit: string; tree: string }[];
 }
 
 interface Event {              // like jj's operation log; append-only
@@ -479,6 +610,19 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
     - code from several branches needs a merge (§8), with conflicts going to a merge agent or the human. `TODO` for the Phase 3 spec.
 22. **Scheduling.** Dependency cycles are rejected. Resource waits and parallelism caps need to be visible, or the human cannot tell "waiting" from "stuck".
 
+### Many people (v0.3)
+
+23. **Someone else's instruction runs on your machine.** An editor's redirect makes an agent act on the runner of the member it runs for. Mitigations:
+    - runners accept work only from allowed members;
+    - sandboxes stay on (D11);
+    - irreversible actions still need confirmation from the member who owns the runner;
+    - every instruction is attributed in the operation log.
+24. **Sync conflicts and stale replicas.** Two members may act on old state, for example both starting the same task. Mitigations:
+    - a task's start is a claim operation;
+    - when the logs merge, the second claim becomes a visible conflict instead of a duplicate run.
+25. **Secrets in shared nodes.** Transcripts and tool output can contain tokens and internal paths. Briefs share summaries and evidence only, and a share preview shows exactly what leaves the machine.
+26. **Scope.** Sync, permissions and a server are large and do not differentiate turtle. They wait for the Phase 2 gate (§2.1, §15).
+
 ---
 
 ## 15. Phased Plan
@@ -487,9 +631,11 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 |---|---|---|
 | **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
 | **1 Web UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream, plus the Phase 0 actions (run / answer / fork / stop / tag / export). Spec: [phase1-spec.md](./phase1-spec.md) | Can a human keep up with the AI? |
-| **2 Task graph** | Concept store (goal / task / finding / decision / question / output) + MCP tools for agents + **mind map as the main screen**. Humans add, edit and drop tasks; a task is assigned to one agent and its work lands on a branch (start from any task's checkpoint = fork). Answering questions, stopping and redirecting happen from the graph. Code tree becomes the drill-down | Does a shared task graph let a human follow and steer the work? Does the agent keep it truthful? |
-| **3 Parallel tasks** | Scheduler: tasks start when dependencies are done, within a parallelism cap. Resources with locks and queues. Outputs stored outside git. Combining upstream work (outputs by path, code via merge agent). Agents may add and start subtasks under budget and depth caps | Value and cost of running tasks in parallel |
-| **4 Explore & compare** | explore (Plan → select → Execute) as sibling tasks, compare view, sharing failed attempts across tasks, human_edit with downstream rebase, token optimization | Value and cost of exploring alternatives |
+| **2 Task graph (single user)** | A turtle project above repositories (several attached repos, multi-repo checkpoints). Concept store with an operation log that is multi-user-ready, plus MCP tools for agents. **Mind map as the main screen**. Humans add, edit and drop tasks. Agent-created tasks start at once, with notifications, Pause and Drop. A task runs one agent; starting from another task's checkpoint is a fork. **Stop and redirect from the graph.** Node briefs and static export. Phase 0–1 runs import as tasks | Does a shared task graph let one human follow and steer several agents? Is the graph truthful? **Gate for Phase 4**, with measured criteria: (1) the human answers "what is each agent doing, what needs me" within 10 s; (2) graph–action agreement; (3) redirect latency; (4) tokens per finished task |
+| **3 Parallel tasks & explore** | Scheduler: tasks start when dependencies are done, within caps. Resources with locks and queues. Output store outside git. Combining upstream work (outputs by path, code via a merge agent). Explore = N sibling tasks plus a compare view. Sharing failed attempts across tasks | Value and cost of parallel and alternative work |
+| **4 Many people** | Replicas synced through a git remote (per-replica op refs, merge of logs, surfaced conflicts). Roles on projects and subtrees. Agents on behalf of members. Requests from commenters | Can several people steer one graph without stepping on each other? |
+| **5 turtle server** | Live share links, per-node permissions, comments from people without turtle, shared runners (e.g. a lab machine with phones) | Sharing nodes instead of documents |
+| **6 Depth** | human_edit with downstream rebase, L0/L1 adapters for other agents and models, token optimization across tasks, scale-up work (§13) | Generality and cost |
 
 ---
 
@@ -516,6 +662,14 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D17 | What a node is | A task is a unit of work: assignable to an agent, with dependencies and resources; its work runs on a code branch |
 | D18 | Main screen | The mind map; the code tree is a drill-down from a task |
 | D19 | Non-code state | D4 stands: environment as code, no container snapshots. External devices and services are resources (lock + queue + side-effect marks); large outputs live outside git, recorded by path + sha256 |
+| D20 | Users | Single user first (Phase 2); the data model is multi-user from the start (actors, replicas, roles); turtle aims to be a general, multi-user system like git |
+| D21 | Agent-created tasks | Start immediately; the UI flags new nodes, batches notifications and offers Pause / Drop; caps queue the excess |
+| D22 | Sharing | The node is the unit of sharing; its brief is kept current by the agent; transcripts, env and local paths are not shared by default |
+| D23 | Project scope | A turtle project is its own repository above code repositories; tasks touch 0..n repositories; a checkpoint is a set of per-repository commits |
+| D24 | Multi-user model | Local-first replicas; per-replica op refs; the graph is the merge of all logs; same-field conflicts are surfaced; sync through any git remote first, a turtle server later |
+| D25 | Permissions | Roles owner / editor / commenter / viewer on a project or subtree; commenter requests need the task owner's acceptance |
+| D26 | Agent identity | An agent acts on behalf of one member, on a runner that member may use (own machine or a shared lab runner); only editors start agents |
+| D27 | Core | Concepts + operations + links + checkpoints form the core; scheduling, UI, notifications and permissions are built on top |
 
 ## 17. TODO
 
@@ -528,4 +682,6 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 - [x] Phase 1 spec → [phase1-spec.md](./phase1-spec.md); manual test guide → [tutorial.md](./tutorial.md)
 - [x] Task-graph direction (v0.2, D15–D19); validated with a clickable mind-map prototype of the phone scenario
 - [ ] Phase 2 spec (task graph): storage of concepts (SQLite + a git ref so the DB stays rebuildable), MCP tool shapes, migration of Phase 0–1 branches into tasks, mind-map layout
-- [ ] Single user vs team: a project management tool invites several humans on one graph
+- [x] Single user vs team → single user first, multi-user model (D20, D24–D26)
+- [x] Cross-repo → a turtle project above repositories (D23)
+- [ ] Phase 0–1 manual verification on macOS (validates the code-layer engine the project reuses)
