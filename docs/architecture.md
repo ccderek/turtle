@@ -42,7 +42,7 @@ Build a new human–AI interface that lets a human:
 
 Course corrections adopted in v0.3:
 
-1. **Validate before infrastructure.** Multi-user sync, permissions and a server are heavy, and they do not differentiate turtle. The core hypothesis comes first: a shared task graph lets one human follow and steer many agents. So Phase 4 (multi-user) starts only after Phase 2 passes measurable criteria (§15).
+1. **Validate before infrastructure.** Multi-user sync, permissions and a server are heavy, and they do not differentiate turtle. The core hypothesis comes first: the task graph is a **faithful, rewindable and shareable record** of AI work, cheap enough to keep. The human reads it when they want and is notified rather than asked. So Phase 4 (multi-user) starts only after Phase 2 passes criteria measured from the records (§15).
 2. **Keep the core small (D27).** git is universal because its core is tiny (objects + refs). turtle's core is concepts, operations and evidence links. Assignment, notifications, scheduling and permissions sit on top. Without that, turtle becomes another ever-growing tracker.
 3. **Do not drop two original goals.**
    - Exploring alternatives (D2) moves into Phase 3: with a scheduler, "explore N approaches" is just N sibling tasks.
@@ -160,7 +160,7 @@ turtle project "perf-lab"            (a git repository of its own: graph + op lo
   - A **runner** is a machine that executes agents: a member's laptop, or a shared lab machine with the phones attached. The lab machine accepts tasks from members allowed to use it.
 - **Agent-created tasks start immediately (D21).** Humans are notified instead of asked:
   - new nodes are flagged until seen;
-  - notifications are batched ("α added 3 subtasks");
+  - notifications are batched in an *Activity* feed ("α added 3 subtasks"); *Needs you* holds only what blocks on a human (questions, blocked or failed tasks, budget limits);
   - every new task offers Pause and Drop;
   - budget, parallelism and depth caps queue the excess, and the UI says why it is queued.
 
@@ -631,7 +631,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 |---|---|---|
 | **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
 | **1 Web UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream, plus the Phase 0 actions (run / answer / fork / stop / tag / export). Spec: [phase1-spec.md](./phase1-spec.md) | Can a human keep up with the AI? |
-| **2 Task graph (single user)** | A turtle project above repositories (several attached repos, multi-repo checkpoints). Concept store with an operation log that is multi-user-ready, plus MCP tools for agents. **Mind map as the main screen**. Humans add, edit and drop tasks. Agent-created tasks start at once (a minimal scheduler: dependencies done + parallelism cap), with notifications, Pause and Drop. A task runs one agent; starting from another task's checkpoint is a fork. **Stop and redirect from the graph.** Node briefs and static export. Phase 0–1 runs import as tasks. Spec: [phase2-spec.md](./phase2-spec.md) | Does a shared task graph let one human follow and steer several agents? Is the graph truthful? **Gate for Phase 4**, with measured criteria: (1) the human answers "what is each agent doing, what needs me" within 10 s; (2) graph–action agreement; (3) redirect latency; (4) tokens per finished task |
+| **2 Task graph (single user)** | A turtle project above repositories (several attached repos, multi-repo checkpoints). Concept store with an operation log that is multi-user-ready, plus MCP tools for agents. **Mind map as the main screen**. Humans add, edit and drop tasks. Agent-created tasks start at once (a minimal scheduler: dependencies done + parallelism cap), with notifications, Pause and Drop. A task runs one agent; starting from another task's checkpoint is a fork. **Stop and redirect from the graph.** Node briefs and static export. Phase 0–1 runs import as tasks. Spec: [phase2-spec.md](./phase2-spec.md) | Is the graph a faithful, rewindable, shareable record of the work? **Gate for Phase 4**, measured passively from the records: (G1) rewindable, meaning checkpoints resumable and forks succeed; (G2) truthful, meaning evidence ratio and audit agreement; (G3) shareable, meaning exported briefs stand on their own; (G4) affordable, meaning tokens per finished task |
 | **3 Parallel tasks & explore** | Full scheduler (a background daemon, budgets across tasks). Resources with locks and queues. Output store outside git. Combining upstream work (outputs by path, code via a merge agent). Explore = N sibling tasks plus a compare view. Sharing failed attempts across tasks | Value and cost of parallel and alternative work |
 | **4 Many people** | Replicas synced through a git remote (per-replica op refs, merge of logs, surfaced conflicts). Roles on projects and subtrees. Agents on behalf of members. Requests from commenters | Can several people steer one graph without stepping on each other? |
 | **5 turtle server** | Live share links, per-node permissions, comments from people without turtle, shared runners (e.g. a lab machine with phones) | Sharing nodes instead of documents |
@@ -663,7 +663,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D18 | Main screen | The mind map; the code tree is a drill-down from a task |
 | D19 | Non-code state | D4 stands: environment as code, no container snapshots. External devices and services are resources (lock + queue + side-effect marks); large outputs live outside git, recorded by path + sha256 |
 | D20 | Users | Single user first (Phase 2); the data model is multi-user from the start (actors, replicas, roles); turtle aims to be a general, multi-user system like git |
-| D21 | Agent-created tasks | Start immediately; the UI flags new nodes, batches notifications and offers Pause / Drop; caps queue the excess |
+| D21 | Agent-created tasks | Start immediately; humans are informed, not asked: new nodes are flagged and batched in an Activity feed (not *Needs you*), with Pause / Drop one click away; caps queue the excess |
 | D22 | Sharing | The node is the unit of sharing; its brief is kept current by the agent; transcripts, env and local paths are not shared by default |
 | D23 | Project scope | A turtle project is its own repository above code repositories; tasks touch 0..n repositories; a checkpoint is a set of per-repository commits |
 | D24 | Multi-user model | Local-first replicas; per-replica op refs; the graph is the merge of all logs; same-field conflicts are surfaced; sync through any git remote first, a turtle server later |

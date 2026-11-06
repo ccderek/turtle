@@ -4,16 +4,20 @@
 
 ## 1. Goal
 
-Phase 2 makes the **task graph** the product. A human states a goal; agents split it into tasks and work on them; the human follows and steers everything from a mind map. It is single-user, but every stored object is already multi-user-shaped (actors, replicas, an operation log), so Phase 4 adds sync without migrating data.
+Phase 2 makes the **task graph** the product. A human states a goal; agents split it into tasks and work on them. The graph is a **faithful, rewindable and shareable record** of that work. The human reads it when they want, goes back to any point, and shares any part. They are notified, not asked: only real questions need them. It is single-user, but every stored object is already multi-user-shaped (actors, replicas, an operation log), so Phase 4 adds sync without migrating data.
 
 ### Questions Phase 2 must answer (the gate for Phase 4)
 
+Measured passively from what turtle records; nothing asks the human to perform.
+
 | # | Question | Measured by | Target |
 |---|---|---|---|
-| G1 | Can one human follow several agents at a glance? | Glance quiz (§15): with 2–3 agents running, the human answers "what is each agent doing / what needs me" | ≥ 8 of 10 answers right within 10 s each |
-| G2 | Is the graph truthful? | Share of findings and `done` tasks with evidence links, plus an audit model's agreement between each task's graph entries and its tool log | ≥ 90 % evidenced; ≥ 85 % audit agreement |
-| G3 | Does steering work in time? | Redirect latency: instruction sent → the agent receives it (next tool boundary) | p95 < 60 s, excluding tools that run longer than that |
-| G4 | What does the graph cost and save? | Tokens per finished task, graph-tool share of tokens, repeated-work rate | Reported (baseline for Phase 3); graph tools < 5 % of tokens |
+| G1 | **Rewindable:** can work restart from any point? | Share of checkpoints with a resume point. Success rate of "new task from here" (files and conversation restored; the agent continues without re-doing finished steps) | ≥ 95 % of declared checkpoints resumable; forks succeed in ≥ 9 of 10 tries |
+| G2 | **Truthful:** does the graph match what happened? | Share of findings and `done` tasks with evidence links, plus an audit model's agreement between each task's graph entries and its tool log | ≥ 90 % evidenced; ≥ 85 % audit agreement |
+| G3 | **Shareable:** does an exported brief stand on its own? | The user judges 3 exports of real tasks: is the goal clear, are the results and decisions with evidence clear, are the open questions clear? Optional proxy: a model answers the same 4 questions from the export alone | 3 of 3 judged clear; no secrets or home paths in any export |
+| G4 | **Affordable:** what does the record cost? | Tokens per finished task, graph-tool share of tokens, repeated-work rate | Reported (baseline for Phase 3); graph tools < 5 % of tokens |
+
+Also recorded, not gated: redirect latency (instruction sent → delivered at the next tool boundary).
 
 ### Non-goals (later phases)
 
@@ -37,8 +41,8 @@ Single-repo users need nothing new: `turtle init` in a code repository creates a
 In the UI:
 
 1. **Write a goal.** For example: "Measure power and performance of model A on the phone, then model B."
-2. **The agent splits it into tasks.** The first agent (the *planner*) runs on the goal and creates tasks with `turtle_task`. Each new task is flagged as **new**, and you get one batched notification ("α added 4 tasks"). Tasks without unmet dependencies start at once, up to the parallelism cap. Others wait.
-3. **Watch the mind map.** Cards change status live; findings, decisions and questions appear under their tasks.
+2. **The agent splits it into tasks.** The first agent (the *planner*) runs on the goal and creates tasks with `turtle_task`. New tasks are flagged **new**, and the *Activity* feed gets one batched entry ("α added 4 tasks"). Nothing waits for your approval. Tasks without unmet dependencies start at once, up to the parallelism cap; the others wait.
+3. **Look when you want.** Cards change status live; findings, decisions and questions appear under their tasks. *Needs you* holds only what is really blocked on you: questions, blocked or failed tasks, and budget limits.
 4. **Answer, redirect, edit.**
    - A question shows in *Needs you*.
    - "Tell the agent…" on a running task reaches it at its next tool boundary.
@@ -260,10 +264,10 @@ The scheduler runs inside `turtle ui` (the long-lived orchestrator). It reacts t
 3. **Queued tasks show why** they wait: "waiting for *Compile A*", "parallel cap 3/3", "paused".
 4. **Without `turtle ui`, nothing auto-starts.** `turtle task start <id>` and `turtle run` still work. A background daemon is Phase 3.
 
-Notifications (D21):
-- **New marks.** Nodes created by agents carry `new` until the member opens or dismisses them (`seen.json`, local).
-- **Batching.** *Needs you* shows one item per agent turn ("α added 3 tasks, 2 findings"), below questions and failures.
-- **Undo window.** A new task shows **Pause** and **Drop** on its card and in the notification.
+Notifications (D21): inform, never ask.
+- **New marks.** Nodes created by agents carry `new` until the member opens them or marks all seen (`seen.json`, local).
+- **Activity feed, not *Needs you*.** One entry per agent turn ("α added 3 tasks, 2 findings"). *Needs you* is reserved for what blocks on the human: questions, blocked or failed tasks, budget limits.
+- **Pause and Drop stay one click away** on a new task's card and its feed entry, for when the human disagrees.
 
 ## 10. Briefs and export
 
@@ -292,7 +296,7 @@ The mind map becomes the home screen; the Phase 1 tree becomes the **Code** tab 
 | Area | Content |
 |---|---|
 | Top bar | Project, goal switcher, running / needs-you / cost, parallel cap, **Code** view toggle |
-| Left | *Needs you* (questions, blocked, failed, new-node batches, budget), running agents, sources |
+| Left | *Needs you* (questions, blocked, failed, budget only), *Activity* (batched new tasks, findings, decisions), running agents, sources |
 | Center | Mind map (as in the prototype): goal → tasks → children (findings, decisions, questions, outputs, subtasks); collapse per node; dependency arrows on hover; `new` badges; status colors; "waiting for …" lines |
 | Right (task) | Brief; facts (agent, status, depends, sources, start point); question box; **Tell the agent…**; findings with evidence (claimed vs evidenced); decisions; tabs: Conversation (live), Code (checkpoints + diffs), Outputs; actions: Pause, Drop, Start now, New task from here, Export |
 | Inline edits | Title and body editable in place; "＋" on a card adds a child task; drag to reorder siblings; a dependency picker |
@@ -336,15 +340,21 @@ turtle stats --gate                        # G1–G4 (§15)
 
 ## 15. Measuring the gate
 
-- **G1 — glance quiz.** `turtle ui --quiz` pops a question at random moments while 2–3 agents run, for example "Which agent is waiting for you?" or "What is *Measure A* doing?". It records the answer and the time to answer. Ten questions per session; the answers are checked against the graph state at that moment.
-- **G2 — truthfulness.**
+- **G1 — rewindable.**
+  - From the records: checkpoints with a resume point ÷ declared checkpoints.
+  - Fork success, from runs of "new task from here". A fork succeeds when the new run (a) restores the files of every source and (b) does not repeat a step that the checkpoint's summary lists as finished, as judged by the audit model from the tool log.
+  - An automated check (`pnpm e2e:rewind`, Haiku) forks from three points of a recorded run and reports both.
+- **G2 — truthful.**
   - *Evidence ratio*: findings with ≥ 1 evidence link ÷ all findings; `done` tasks with ≥ 1 checkpoint ÷ all `done` tasks.
   - *Audit*: for each finished task, Haiku compares its findings, decisions and status against its tool log and diff. It answers per item: supported, unsupported or contradicted. Agreement = supported ÷ items. Cost is reported (target < 3 % of run cost).
-- **G3 — redirect latency.** From `instruction_queued` to `instruction_delivered`, reported as p50/p95, with the duration of the tool that was running at the time.
+- **G3 — shareable.**
+  - The user exports 3 real tasks and judges each against four questions: goal, results with evidence, decisions, open questions.
+  - `turtle export --check` runs the optional model proxy and a redaction scan (home paths, env-like `KEY=` values, tokens).
 - **G4 — tokens.**
   - Usage per finished task.
   - The share spent on `turtle_*` tool calls and the context assembler's additions.
   - Repeated work: tasks whose tool logs re-run a command already run by a task they depend on.
+- **Redirect latency** (recorded, not gated): from `instruction_queued` to `instruction_delivered`, reported as p50/p95, with the duration of the tool that was running at the time.
 
 `turtle stats --gate` prints G1–G4 with pass/fail against §1.
 
@@ -372,7 +382,7 @@ turtle stats --gate                        # G1–G4 (§15)
 | M5 | Steering: tell via hooks (live-verified), pause/resume/drop, edits → instructions | `pnpm e2e:tell` passes; G3 events recorded |
 | M6 | Scheduler + caps + notifications | Dependency start and "waiting for …" in the scenario |
 | M7 | Mind map UI (home), task panel, Code tab, inline edits | `pnpm ui:smoke` drives the phone scenario end to end |
-| M8 | Export, `stats --gate`, quiz mode, docs + tutorial update | Gate report on the demo; tutorial Part D (task graph) |
+| M8 | Export (+ `--check`), `stats --gate`, `e2e:rewind`, docs + tutorial update | Gate report on the demo; tutorial Part D (task graph) |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 
 ## 18. Known limitations and open questions
