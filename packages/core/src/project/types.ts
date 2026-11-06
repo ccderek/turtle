@@ -43,6 +43,8 @@ export interface ConceptFields {
   sources?: string[];
   resources?: string[];
   startFrom?: StartFrom | null;
+  /** Code branches this task's work landed on, one per source. */
+  branches?: { source: string; branch: string }[];
   brief?: string;
   // question
   options?: string[];

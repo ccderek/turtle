@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { HeuristicSummarizer } from "@turtle/core";
+import { GitStore, HeuristicSummarizer, importAllSources, Project } from "@turtle/core";
 import { demoLauncher, startServer } from "@turtle/server";
-import { CliError, type Context } from "../context.js";
+import { CliError, openContext } from "../context.js";
 import { c } from "../render.js";
 import { credentialHint, launcherFor, summarizerFor } from "./run.js";
 
@@ -28,8 +28,25 @@ export function webDistDir(): string | null {
 }
 
 /** `turtle ui`: serve the web UI until Ctrl-C (docs/phase1-spec.md §3). */
-export async function uiCommand(ctx: Context, o: UiOptions): Promise<number> {
+export async function uiCommand(cwd: string, o: UiOptions): Promise<number> {
   const print = (line: string) => process.stdout.write(`${line}\n`);
+  let project = await Project.find(cwd);
+  if (!project) {
+    let store: GitStore;
+    try {
+      store = await GitStore.open(cwd);
+    } catch {
+      throw new CliError(`not a turtle project or git repository: ${cwd}`);
+    }
+    project = await Project.ensureForRepo(store);
+  }
+  const primary =
+    project.config.sources.find((s) => cwd === s.path || cwd.startsWith(`${s.path}/`)) ??
+    project.config.sources[0];
+  if (!primary)
+    throw new CliError("the project has no sources yet: turtle project add-source <repo>");
+  const ctx = await openContext(primary.path);
+  const imported = await importAllSources(project);
   const port = o.port === undefined ? DEFAULT_UI_PORT : Number(o.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new CliError(`invalid --port: ${o.port}`);
@@ -51,6 +68,7 @@ export async function uiCommand(ctx: Context, o: UiOptions): Promise<number> {
       staticDir,
       port,
       log: (line) => print(c.dim(`${new Date().toLocaleTimeString()} ${line}`)),
+      project,
     });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EADDRINUSE")
@@ -61,8 +79,9 @@ export async function uiCommand(ctx: Context, o: UiOptions): Promise<number> {
   }
 
   print(
-    `${c.bold("turtle ui")}  ${c.cyan(server.url)}  ${c.dim(`repo ${ctx.store.topLevel ?? ctx.cwd}`)}`,
+    `${c.bold("turtle ui")}  ${c.cyan(server.url)}  ${c.dim(`project ${project.config.name} (${project.dir})`)}`,
   );
+  if (imported.length) print(c.dim(`imported ${imported.length} earlier run(s) as tasks`));
   if (o.demoAgent) print(c.yellow("demo agent: runs are scripted, no model is called"));
   else {
     const hint = credentialHint(ctx.config.sandbox.mode);

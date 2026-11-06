@@ -7,6 +7,7 @@ import {
   exportNode,
   type GitStore,
   OpsError,
+  type Project,
   RefConflictError,
   type RunEvent,
   type RunnerLauncher,
@@ -30,6 +31,7 @@ import type {
   RunResponse,
   TranscriptResponse,
 } from "./api.js";
+import { graphRoutes, RouteError } from "./graph-routes.js";
 import { StateBuilder, transcriptItems } from "./views.js";
 
 const POLL_MS = 250;
@@ -52,6 +54,8 @@ export interface ServerOptions {
   /** Where workspaces live (tests); default ~/.turtle/workspaces/<repo>. */
   workspaceRoot?: string;
   log?: (line: string) => void;
+  /** The task graph this server serves (Phase 2). */
+  project?: Project;
 }
 
 export interface TurtleServer {
@@ -92,10 +96,12 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
   };
 
   // ------------------------------------------------------------ live loop
-  let lastToken = db.changeToken();
+  const graph = o.project ? graphRoutes(o.project) : null;
+  const changeToken = () => `${db.changeToken()}|${o.project?.db.changeToken() ?? ""}`;
+  let lastToken = changeToken();
   let stopSeq = db.listEvents({ type: "stop_request" }).at(-1)?.seq ?? 0;
   const poll = setInterval(() => {
-    const token = db.changeToken();
+    const token = changeToken();
     if (token === lastToken) return;
     lastToken = token;
     for (const e of db.listEvents({ type: "stop_request", afterSeq: stopSeq })) {
@@ -281,12 +287,16 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       if (a === "agents" && b && c === "transcript")
         return json(res, transcript(b, Number(url.searchParams.get("after") ?? 0) || 0));
       if (a === "artifacts" && b && !c) return serveArtifact(res, b);
+      const g = graph?.get(parts, url);
+      if (g !== undefined) return json(res, g);
       throw new HttpError(404, "not found");
     }
     if (method === "POST") {
       checkMutation(req);
       const body = await readJson(req);
       if (a === "runs" && !b) return json(res, await startRun(body as unknown as RunRequest), 201);
+      const g = graph ? await graph.post(parts, body) : undefined;
+      if (g !== undefined) return json(res, g);
       if (a === "branches" && b && c === "stop") return json(res, await stopBranch(b));
       if (a === "nodes" && b && c === "tag") {
         const n = db.getNode(b);
@@ -404,7 +414,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       })
       .catch((err: unknown) => {
         const status =
-          err instanceof HttpError
+          err instanceof HttpError || err instanceof RouteError
             ? err.status
             : err instanceof OpsError
               ? 400

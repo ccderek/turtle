@@ -3,13 +3,18 @@
  * imports this file directly.
  */
 import type {
+  Actor,
   Agent,
   Artifact,
   Branch,
+  Concept,
+  Link,
   NodeKind,
   NodeStatus,
+  ProjectConfig,
   SandboxMode,
   Snapshot,
+  SourceConfig,
   TurtleNode,
 } from "@turtle/core";
 
@@ -141,3 +146,32 @@ export type LiveEvent =
       level: "info" | "warn" | "error";
       message: string;
     };
+
+// ------------------------------------------------------------ Phase 2: task graph
+
+export type { Actor, Concept, Link, SourceConfig };
+
+export interface ProjectResponse {
+  name: string;
+  dir: string;
+  sources: SourceConfig[];
+  resources: ProjectConfig["resources"];
+  defaults: ProjectConfig["defaults"];
+  me: { memberId: string; name: string };
+}
+
+export interface GraphResponse {
+  /** Pass back as `?since=` to get only what changed. */
+  cursor: number;
+  /** false: only concepts and links touched since the cursor. */
+  full: boolean;
+  concepts: Concept[];
+  links: Link[];
+}
+
+export interface ConceptDetailResponse {
+  concept: Concept;
+  links: Link[];
+  backlinks: Link[];
+  history: { id: string; at: string; actor: Actor; kind: string; batch: string }[];
+}

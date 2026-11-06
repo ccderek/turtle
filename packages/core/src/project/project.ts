@@ -92,6 +92,7 @@ const SET_FIELDS: readonly ConceptField[] = [
   "sources",
   "resources",
   "startFrom",
+  "branches",
   "brief",
   "options",
   "answer",
@@ -297,6 +298,25 @@ export class Project {
     const id = `l_${newId()}`;
     await this.log.append(actor, [{ kind: "link", id, from, rel, to }]);
     return id;
+  }
+
+  /** Record a human's answer and the decision it makes (docs/phase2-spec.md §6.2). */
+  async answerQuestion(questionId: string, text: string, actor: Actor = this.me): Promise<Concept> {
+    const q = this.requireConcept(questionId);
+    if (q.kind !== "question") throw new OpsError(`${questionId} is not a question`);
+    if (!text.trim()) throw new OpsError("an answer is required");
+    const by = actor.type === "member" ? actor.id : actor.onBehalfOf;
+    await this.updateConcept(
+      q.id,
+      { answer: { text: text.trim(), by, at: new Date().toISOString() } },
+      { actor },
+    );
+    const d = await this.createConcept(
+      { kind: "decision", parentId: q.parentId, title: text.trim(), body: `Answer to: ${q.title}` },
+      actor,
+    );
+    await this.link(d.id, "provenance", { type: "concept", id: q.id }, actor);
+    return d;
   }
 
   /**

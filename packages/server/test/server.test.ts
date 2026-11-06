@@ -11,12 +11,16 @@ import {
   git,
   HeuristicSummarizer,
   mergeConfig,
+  Project,
   requestStop,
   TurtleDb,
 } from "@turtle/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
+  Concept,
+  ConceptDetailResponse,
   DiffResponse,
+  GraphResponse,
   NodeDetailResponse,
   RunResponse,
   StateResponse,
@@ -33,7 +37,7 @@ afterEach(async () => {
 });
 
 /** Scripts are picked per run from a queue the test fills. */
-async function setup(opts: { failLaunch?: boolean } = {}) {
+async function setup(opts: { failLaunch?: boolean; project?: boolean } = {}) {
   const repo = await mkdtemp(join(tmpdir(), "turtle-srv-"));
   await git(["init", "-q", "-b", "main"], { cwd: repo });
   await writeFile(join(repo, "a.txt"), "a\n");
@@ -50,7 +54,11 @@ async function setup(opts: { failLaunch?: boolean } = {}) {
   await writeFile(join(staticDir, "index.html"), "<!doctype html><title>turtle</title>");
   const scripts: FakeScript[] = [];
   const agents: FakeAgent[] = [];
+  const project = opts.project
+    ? await Project.ensureForRepo(store, { home: await mkdtemp(join(tmpdir(), "turtle-home-")) })
+    : undefined;
   const server = await startServer({
+    ...(project ? { project } : {}),
     store,
     db,
     config,
@@ -96,7 +104,20 @@ async function setup(opts: { failLaunch?: boolean } = {}) {
   };
   const branchStatus = (id: string, status: string) =>
     waitFor(async () => (await state()).branches.find((b) => b.id === id && b.status === status));
-  return { repo, store, db, dbPath, server, scripts, agents, api, state, waitFor, branchStatus };
+  return {
+    repo,
+    store,
+    db,
+    dbPath,
+    server,
+    scripts,
+    agents,
+    api,
+    state,
+    waitFor,
+    branchStatus,
+    project,
+  };
 }
 
 const askScript: FakeScript = async (a) => {
@@ -350,5 +371,72 @@ describe("turtle ui server", () => {
     const res = await fetch(`${t.server.url}/..%2f..%2f..%2fetc%2fpasswd`);
     expect(await res.text()).toContain("<title>turtle</title>");
     expect((await fetch(`${t.server.url}/some/route`)).status).toBe(200);
+  });
+
+  it("serves the task graph: create, edit, deltas, answer, undo", async () => {
+    const t = await setup({ project: true });
+    const proj = (await t.api<{ name: string; sources: unknown[] }>("/api/project")).body;
+    expect(proj.sources).toHaveLength(1);
+    const goal = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "goal", parentId: null, title: "Measure A" },
+      })
+    ).body;
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Set up phone", bogus: "ignored" },
+      })
+    ).body;
+    expect(task).toMatchObject({ status: "todo", parentId: goal.id });
+    const full = (await t.api<GraphResponse>("/api/graph")).body;
+    expect(full.full).toBe(true);
+    expect(full.concepts.map((c) => c.id).sort()).toEqual([goal.id, task.id].sort());
+
+    const edited = (
+      await t.api<Concept>(`/api/concepts/${task.id}`, {
+        method: "POST",
+        body: { fields: { title: "Set up the phone" } },
+      })
+    ).body;
+    expect(edited.version).toBe(2);
+    const delta = (await t.api<GraphResponse>(`/api/graph?since=${full.cursor}`)).body;
+    expect(delta.full).toBe(false);
+    expect(delta.concepts.map((c) => c.id)).toEqual([task.id]);
+
+    const q = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "question", parentId: task.id, title: "USB or Wi-Fi adb?" },
+      })
+    ).body;
+    const d = (
+      await t.api<Concept>(`/api/questions/${q.id}/answer`, {
+        method: "POST",
+        body: { text: "USB" },
+      })
+    ).body;
+    expect(d).toMatchObject({ kind: "decision", title: "USB", parentId: task.id });
+    const detail = (await t.api<ConceptDetailResponse>(`/api/concepts/${q.id}`)).body;
+    expect(detail.concept.answer?.text).toBe("USB");
+    expect(detail.backlinks.map((l) => l.rel)).toEqual(["provenance"]);
+
+    const lastOp = detail.history.at(-1)?.id as string;
+    await t.api(`/api/ops/${lastOp}/undo`, { method: "POST", body: {} });
+    expect(
+      (await t.api<ConceptDetailResponse>(`/api/concepts/${q.id}`)).body.concept.answer ?? null,
+    ).toBeNull();
+
+    expect((await t.api("/api/concepts/c_nope")).status).toBe(404);
+    expect(
+      (
+        await t.api("/api/concepts", {
+          method: "POST",
+          body: { kind: "task", parentId: null, title: "x" },
+        })
+      ).status,
+    ).toBe(400);
+    t.project?.close();
   });
 });

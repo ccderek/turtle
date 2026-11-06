@@ -92,6 +92,13 @@ export class GraphDb {
     return this.raw.transaction(fn)();
   }
 
+  /** Changes whenever any connection commits (live views poll it). */
+  changeToken(): string {
+    const dataVersion = this.raw.pragma("data_version", { simple: true });
+    const own = (this.raw.prepare("SELECT total_changes() AS n").get() as Row).n;
+    return `${dataVersion}:${own}`;
+  }
+
   getMeta(key: string): string | null {
     const r = this.raw.prepare("SELECT value FROM meta WHERE key = ?").get(key) as Row | undefined;
     return r ? String(r.value) : null;
@@ -125,6 +132,32 @@ export class GraphDb {
       .prepare("SELECT replica, MAX(seq) AS s FROM ops GROUP BY replica")
       .all() as Row[];
     return Object.fromEntries(rows.map((r) => [String(r.replica), Number(r.s)]));
+  }
+
+  /** Position of the latest operation in the view (a cursor for deltas). */
+  maxOrd(): number {
+    return Number((this.raw.prepare("SELECT COALESCE(MAX(ord), 0) AS n FROM ops").get() as Row).n);
+  }
+
+  /** Concept and link ids touched by operations after `ord`. */
+  touchedSince(ord: number): { concepts: string[]; links: string[] } {
+    const rows = this.raw
+      .prepare("SELECT change FROM ops WHERE ord > ? ORDER BY ord")
+      .all(ord) as Row[];
+    const concepts = new Set<string>();
+    const links = new Set<string>();
+    for (const r of rows) {
+      const c = JSON.parse(String(r.change)) as Change;
+      if (c.kind === "link" || c.kind === "unlink") {
+        links.add(c.id);
+        if (c.kind === "link") concepts.add(c.from);
+      } else concepts.add(c.id);
+    }
+    return { concepts: [...concepts], links: [...links] };
+  }
+
+  getLink(id: string): Link | null {
+    return this.listLinks({ includeRemoved: true }).find((l) => l.id === id) ?? null;
   }
 
   hasOp(id: string): boolean {

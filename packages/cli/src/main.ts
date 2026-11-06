@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { Command } from "commander";
+import {
+  answerCommand,
+  goalCommand,
+  graphCommand,
+  taskAddCommand,
+  taskDropCommand,
+  taskShowCommand,
+  undoCommand,
+} from "./commands/graph.js";
 import { logCommand, showCommand, statsCommand, statusCommand } from "./commands/inspect.js";
 import {
   checkoutCommand,
@@ -88,13 +97,66 @@ project
   .action(async () => print(await projectRebuildCommand(cwd())));
 
 program
+  .command("goal")
+  .description("add a goal: the root of a task graph")
+  .argument("<text>", "what you want; the first line is the title")
+  .action(async (text: string) => print(await goalCommand(cwd(), text, {})));
+
+program
+  .command("graph")
+  .description("the task graph as a tree")
+  .option("-g, --goal <goal>", "only this goal")
+  .option("-a, --all", "include dropped concepts")
+  .action(async (o: { goal?: string; all?: boolean }) => print(await graphCommand(cwd(), o)));
+
+const task = program.command("task").description("tasks in the graph");
+task
+  .command("add")
+  .description("add a task (under the latest goal unless --parent)")
+  .argument("<title>")
+  .option("-p, --parent <concept>", "goal or task to put it under")
+  .option("--after <task...>", "tasks that must be done first")
+  .option("--from <task>", "start from this task's latest checkpoint (reuse its work)")
+  .option("-b, --body <text>", "details")
+  .option("--no-agent", "a task for you, not for an agent")
+  .action(
+    async (
+      title: string,
+      o: { parent?: string; after?: string[]; from?: string; body?: string; agent?: boolean },
+    ) => print(await taskAddCommand(cwd(), title, { ...o, noAgent: o.agent === false })),
+  );
+task
+  .command("show")
+  .description("a concept with its links and history")
+  .argument("<concept>")
+  .action(async (ref: string) => print(await taskShowCommand(cwd(), ref)));
+task
+  .command("drop")
+  .description("drop a task or concept (undoable)")
+  .argument("<concept>")
+  .action(async (ref: string) => print(await taskDropCommand(cwd(), ref)));
+
+program
+  .command("answer")
+  .description("answer a question; the answer is recorded as a decision")
+  .argument("<question>")
+  .argument("<text>")
+  .action(async (ref: string, text: string) => print(await answerCommand(cwd(), ref, text)));
+
+program
+  .command("undo")
+  .description("undo the batch of operations containing <op>")
+  .argument("<op>", "operation id prefix (see turtle task show)")
+  .action(async (op: string) => print(await undoCommand(cwd(), op)));
+
+program
   .command("ui")
   .description("open the web UI: live tree, what needs you, diffs, and start/answer/fork/stop runs")
   .option("-p, --port <port>", `port on 127.0.0.1 (default ${DEFAULT_UI_PORT}; 0 = any free port)`)
   .option("--no-open", "do not open a browser")
   .option("--demo-agent", "scripted agents instead of Claude (no credentials needed)")
   .action(async (o: UiOptions) => {
-    process.exitCode = await uiCommand(await openContext(cwd()), o);
+    process.exitCode = await uiCommand(cwd(), o);
   });
 
 program
