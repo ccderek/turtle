@@ -294,6 +294,8 @@ Notifications (D21): inform, never ask.
 - **Activity feed, not *Needs you*.** One entry per agent turn ("α added 3 tasks, 2 findings"). *Needs you* is reserved for what blocks on the human: questions, blocked or failed tasks, budget limits.
 - **Pause and Drop stay one click away** on a new task's card and its feed entry, for when the human disagrees.
 
+**As built (M5 + first UI).** `TaskRunner` in `packages/server/src/tasks.ts` runs tasks in the `turtle ui` process. A task is ready when it is `todo`, assigned to an agent, its dependencies are `done`, and no ancestor task is inactive (paused, dropped, abandoned). It starts ready tasks in creation order up to `maxParallel` (default 3) on every graph change and every 5 s. *Auto-start* is a toggle in the toolbar (`defaults.autoStart`, default on). With it off, tasks start only with **Start**. A new goal gets a planner task (`role: "planner"`, when `defaults.planOnGoal` is not false and "Let a planner agent split it into tasks" is ticked). The planner's tasks then start as their dependencies finish. Answering the last open question of a task continues that task at once. The budget cap and per-turn batching of Activity entries are not built yet. Activity lists one entry per operation, and repeated identical entries are folded.
+
 ## 10. Briefs and export
 
 - **What a brief is.** The agent keeps it current with `turtle_brief`, at least at every semantic checkpoint. The system prompt asks; the orchestrator reminds in the checkpoint reply if the brief is older than the last two checkpoints.
@@ -338,7 +340,9 @@ The mind map becomes the home screen; the Phase 1 tree becomes the **Code** tab 
 | Right (task) | Brief; facts (agent, status, depends, sources, start point); question box; **Tell the agent…**; findings with evidence (claimed vs evidenced); decisions; tabs: Conversation (live), Code (checkpoints + diffs), Outputs; actions: Pause, Drop, Start now, New task from here, Export |
 | Inline edits | Title and body editable in place; "＋" on a card adds a child task; drag to reorder siblings; a dependency picker |
 
-Layout: a horizontal tidy tree (Reingold–Tilford style). It is computed client-side, sized for ≤ 300 visible cards, and subtrees collapse beyond that. Live updates use the Phase 1 SSE `change` channel plus a new `GET /api/graph?since=<opId>` delta, so the graph no longer refetches whole.
+**As built (first version, with M5).** The home screen is the **Tasks** tab when a project is open; **Code** is the Phase 1 view. Left: *Needs you* (open questions, proposed lessons, blocked and failed tasks) and *Activity* (newest first; `new` until "mark seen", stored per browser). Center: one block per goal, with an **outline mind map**: indented cards with guide lines and fold arrows; tasks show status, "by agent/you", `from <checkpoint>` for rewinds, the brief's first line or "waiting for …"; findings, decisions, questions, outputs and lessons are compact leaves. Right: the concept panel: title and body edited in place (editing a running task tells the agent what changed); brief; facts (done by, after, starts from, code branch, which opens the Code tab); **Tell the agent**, **Pause**, **Drop** while running; **Start** / **Continue** otherwise; **Abandon…** with an optional lesson text; **Try another way**; add a subtask; lessons in force; the question box with the agent's options; lesson confirm / supersede; children; history with undo. Toolbar: **New goal**, *Auto-start ready tasks* (n/max running), *Show dropped*. The page polls `GET /api/graph?since=` on every SSE `change`. Not built yet: the horizontal tidy tree, dependency arrows, the conversation and outputs tabs in the panel, drag to reorder, export. `pnpm ui:smoke` drives the Code view and then `scripts/ui-smoke-tasks.mjs` drives the task graph: the trading demo's lesson, B auto-starting, telling it something mid-run, dependent tasks running in turn, a question answered by option, a new goal with the planner, abandoning a task into a proposed lesson, dark mode, phone width.
+
+Layout target: a horizontal tidy tree (Reingold–Tilford style). It is computed client-side, sized for ≤ 300 visible cards, and subtrees collapse beyond that. Live updates use the Phase 1 SSE `change` channel plus a new `GET /api/graph?since=<opId>` delta, so the graph no longer refetches whole.
 
 ## 13. HTTP API additions
 
@@ -416,9 +420,9 @@ turtle stats --gate                        # G1–G4 (§15)
 | M2 | Concepts API (core + server + CLI `goal/task/graph`), migration of Phase 0–1 branches | An existing Phase 1 repo opens as a graph |
 | M3 | Multi-source workspaces and checkpoints (`RunSession` generalization) | Two-source scenario test passes; single-source behavior unchanged |
 | M4 | Agent tools + context assembler + briefs | FakeAgent scenario builds the phone graph |
-| M5 | Steering: tell via hooks (live-verified), pause/resume/drop, edits → instructions | `pnpm e2e:tell` passes; G3 events recorded |
-| M6 | Scheduler + caps + notifications | Dependency start and "waiting for …" in the scenario |
-| M7 | Mind map UI (home), task panel, Code tab, inline edits | `pnpm ui:smoke` drives the phone scenario end to end |
+| M5 | Steering: tell (live-verified as a streaming user message, not hooks), pause/resume/drop, edits → instructions | **Done**, with the first task-graph UI, the in-process scheduler and an offline demo agent (`pnpm demo:ui`) |
+| M6 | Scheduler + caps + notifications (dependency start, "waiting for …" and auto-start already built with M5) | Budget cap, batched Activity, a daemon-free restart story |
+| M7 | Mind map UI polish: tidy tree, dependency arrows, conversation/outputs tabs in the task panel | `pnpm ui:smoke` drives the phone scenario end to end (the trading scenario already passes) |
 | M8 | Export (+ `--check`), `stats --gate`, `e2e:rewind`, docs + tutorial update | Gate report on the demo; tutorial Part D (task graph) |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 
@@ -427,7 +431,7 @@ turtle stats --gate                        # G1–G4 (§15)
 - **Scheduling needs `turtle ui`** (or explicit `turtle task start`); there is no daemon until Phase 3.
 - **No resource locks yet.** Two tasks can still use one phone at once. The UI warns when two running tasks list the same resource.
 - **Combining upstream code.** A task that depends on tasks in *different* branches of the same source starts from one of them; it gets the others' findings and outputs, not their code. Code merging is Phase 3.
-- **Hook delivery.** **VERIFY** that `additionalContext` from PostToolUse reaches the model *before* its next decision, and how a Stop-hook continuation is counted in `num_turns` and cost.
+- **Hook delivery (resolved in M5).** `additionalContext` from PostToolUse does reach the model, but the model treats it as possible prompt injection and ignores instructions in it. Instructions now go in as streaming user messages (§11). An instruction that arrives exactly as the agent ends its turn relies on the runner's 3 s close delay; that path is tested with the FakeAgent, not yet live.
 - **Resources that need confirmation** (`confirm: always`, architecture D29) are recorded in Phase 2 but enforced in Phase 3, together with locks.
 - **Planner quality.** Whether agents split goals into good tasks is part of G2/G4. If not, the planner prompt becomes a configurable template.
 - **Migration** maps Phase 0–1 runs to tasks without findings; their briefs are generated from summaries.

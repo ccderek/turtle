@@ -48,6 +48,8 @@ export interface ProjectConfig {
     maxParallel?: number;
     maxBudgetUsd?: number;
     planOnGoal?: boolean;
+    /** Start ready agent tasks on their own while `turtle ui` runs (default true). */
+    autoStart?: boolean;
   };
 }
 
@@ -93,6 +95,7 @@ const SET_FIELDS: readonly ConceptField[] = [
   "resources",
   "startFrom",
   "branches",
+  "role",
   "brief",
   "options",
   "answer",

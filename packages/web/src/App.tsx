@@ -7,6 +7,20 @@ import { RunDialog } from "./RunDialog.js";
 import { Sidebar } from "./Sidebar.js";
 import { type Toast, Toasts } from "./Toasts.js";
 import { TreeView } from "./TreeView.js";
+import { TasksView } from "./tasks/TasksView.js";
+
+type View = "tasks" | "code";
+
+function readView(): View | null {
+  if (/^#\/c\//.test(window.location.hash)) return "tasks";
+  if (/^#\/(node|branch)\//.test(window.location.hash)) return "code";
+  return null;
+}
+
+function readConcept(): string | null {
+  const m = /^#\/c\/([\w-]+)$/.exec(window.location.hash);
+  return m ? (m[1] as string) : null;
+}
 
 export type Selection =
   | { type: "node"; id: string; compose?: boolean }
@@ -51,6 +65,23 @@ export function App() {
   const [version, setVersion] = useState(0);
   const [newRun, setNewRun] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [hasProject, setHasProject] = useState(false);
+  const [view, setView] = useState<View>(() => readView() ?? "tasks");
+  const [concept, setConcept] = useState<string | null>(readConcept);
+
+  useEffect(() => {
+    get("/api/project").then(
+      () => setHasProject(true),
+      () => setHasProject(false),
+    );
+  }, []);
+
+  const selectConcept = useCallback((id: string | null) => {
+    setConcept(id);
+    const hash = id ? `#/c/${id}` : "";
+    if (window.location.hash !== hash)
+      window.history.replaceState(null, "", hash || window.location.pathname);
+  }, []);
 
   const toast = useCallback((text: string, tone: Toast["tone"] = "info") => {
     const id = Math.random().toString(36).slice(2);
@@ -108,9 +139,21 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setSelection(readHash());
+    const onHash = () => {
+      setSelection(readHash());
+      setConcept(readConcept());
+      const v = readView();
+      if (v) setView(v);
+    };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !(e.target instanceof HTMLTextAreaElement)) select(null);
+      if (
+        e.key === "Escape" &&
+        !(e.target instanceof HTMLTextAreaElement) &&
+        !(e.target instanceof HTMLInputElement)
+      ) {
+        select(null);
+        selectConcept(null);
+      }
     };
     window.addEventListener("hashchange", onHash);
     window.addEventListener("keydown", onKey);
@@ -118,7 +161,7 @@ export function App() {
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("keydown", onKey);
     };
-  }, [select]);
+  }, [select, selectConcept]);
 
   const short = useMemo(
     () =>
@@ -152,6 +195,29 @@ export function App() {
   }
 
   const ctx: Ctx = { state, short, version, select, toast };
+  const tasksMode = hasProject && view === "tasks";
+  const tabs = hasProject ? (
+    <div className="view-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tasksMode}
+        className={tasksMode ? "on" : ""}
+        onClick={() => setView("tasks")}
+      >
+        Tasks
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={!tasksMode}
+        className={!tasksMode ? "on" : ""}
+        onClick={() => setView("code")}
+      >
+        Code
+      </button>
+    </div>
+  ) : null;
   const panel = selection ? (
     selection.type === "node" ? (
       <NodePanel
@@ -166,7 +232,9 @@ export function App() {
   ) : null;
 
   return (
-    <div className={`app${panel ? " with-panel" : ""}`}>
+    <div
+      className={`app${panel && !tasksMode ? " with-panel" : ""}${tasksMode ? " tasks-mode" : ""}`}
+    >
       <header className="topbar">
         <div className="brand">
           <span className="logo" aria-hidden="true" />
@@ -175,6 +243,7 @@ export function App() {
             {state.repo.name}
           </span>
         </div>
+        {tabs}
         <div className="stats">
           <span
             className={`conn ${conn}`}
@@ -193,33 +262,54 @@ export function App() {
           </span>
         </div>
         <div className="actions">
-          <label className="toggle" title="Show every tool call (micro snapshots) in the tree">
-            <input
-              type="checkbox"
-              checked={showSteps}
-              onChange={(e) => {
-                setShowSteps(e.target.checked);
-                writePref("turtle.showSteps", e.target.checked);
-              }}
-            />
-            Show steps
-          </label>
-          <button type="button" className="primary" onClick={() => setNewRun(true)}>
-            New run
-          </button>
+          {!tasksMode && (
+            <label className="toggle" title="Show every tool call (micro snapshots) in the tree">
+              <input
+                type="checkbox"
+                checked={showSteps}
+                onChange={(e) => {
+                  setShowSteps(e.target.checked);
+                  writePref("turtle.showSteps", e.target.checked);
+                }}
+              />
+              Show steps
+            </label>
+          )}
+          {!tasksMode && (
+            <button type="button" className="primary" onClick={() => setNewRun(true)}>
+              New run
+            </button>
+          )}
         </div>
       </header>
       {error && <div className="banner bad">Connection problem: {error}</div>}
-      <Sidebar ctx={ctx} selection={selection} />
-      <main className="tree-area">
-        <TreeView
-          ctx={ctx}
-          selection={selection}
-          showSteps={showSteps}
-          onNewRun={() => setNewRun(true)}
-        />
-      </main>
-      {panel && <aside className="panel">{panel}</aside>}
+      {tasksMode ? (
+        <div className="tasks-area">
+          <TasksView
+            version={version}
+            toast={toast}
+            selected={concept}
+            onSelect={selectConcept}
+            openBranch={(id) => {
+              setView("code");
+              select({ type: "branch", id });
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          <Sidebar ctx={ctx} selection={selection} />
+          <main className="tree-area">
+            <TreeView
+              ctx={ctx}
+              selection={selection}
+              showSteps={showSteps}
+              onNewRun={() => setNewRun(true)}
+            />
+          </main>
+          {panel && <aside className="panel">{panel}</aside>}
+        </>
+      )}
       {newRun && <RunDialog ctx={ctx} onClose={() => setNewRun(false)} />}
       <Toasts toasts={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>

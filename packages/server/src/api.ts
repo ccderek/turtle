@@ -167,6 +167,21 @@ export interface GraphResponse {
   full: boolean;
   concepts: Concept[];
   links: Link[];
+  /** Task ids with an agent running in this server. */
+  running?: string[];
+  /** Why each todo task is not starting. */
+  waiting?: Record<string, string>;
+  autoStart?: boolean;
+  maxParallel?: number;
+}
+
+export interface ActivityItem {
+  id: string;
+  at: string;
+  who: string;
+  byAgent: boolean;
+  conceptId: string | null;
+  text: string;
 }
 
 export interface ConceptDetailResponse {
@@ -174,4 +189,6 @@ export interface ConceptDetailResponse {
   links: Link[];
   backlinks: Link[];
   history: { id: string; at: string; actor: Actor; kind: string; batch: string }[];
+  /** Lessons that apply to this concept (on it and its ancestors). */
+  lessons: Concept[];
 }

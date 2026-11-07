@@ -87,6 +87,8 @@ This creates a throwaway repository in a temporary folder (its path is printed a
 | "fail" | failing tests (blocked) |
 | anything else | done |
 
+The page opens on the **Tasks** tab (the task graph, Part D). Part A is about the **Code** tab: click **Code** at the top first.
+
 Try these, and tick each check (A1–A8) as you go:
 
 1. **A1. Read the screen.**
@@ -299,6 +301,42 @@ Stop the UI with Ctrl-C in its terminal.
 
 ---
 
+## Part D — The task graph (offline, about 10 minutes)
+
+Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **Tasks** tab shows a seeded example: a friend's trading system. One approach to the investment signal (A, news sentiment) was tried, failed out of sample and was abandoned. Its lesson sits on the *Investment signal* node, and approach B starts from the checkpoint before A. The demo agent works in small steps (about 5 s per task) and calls no model.
+
+| A task's title contains | The demo agent |
+|---|---|
+| a `?`, or "which", "should" | asks you a question with two options |
+| "fail" or "wrong" | records a finding and ends blocked |
+| anything else | records a finding with a CSV as evidence, a decision and a brief, then ends done |
+
+1. **D1. Read the map.**
+   - The goal card is on top, with its tasks indented below it. Findings, decisions, outputs and lessons are the small rows under each task.
+   - *Approach A* is struck through (abandoned, kept in the record). The purple **lesson** row above it is what every task under *Investment signal* must follow.
+2. **D2. B starts on its own.**
+   - Within a few seconds *Approach B* turns **running** (auto-start is ticked in the toolbar). Click it. The panel shows *Starts from* (the checkpoint before A) and *Lessons this task follows*.
+3. **D3. Tell it something while it works.**
+   - Quickly, while B is still running, type `Also log every trade to a CSV` under **Tell the agent** and press **Send**.
+   - A decision row "Following the user's message: …" appears under B. If B finished first, press **Continue** with the same text instead.
+4. **D4. Watch Activity.**
+   - When B is done, *Schedule* starts, then *Go live*. Each agent action shows up in *Activity* on the left with a blue `new` mark. Nothing asks you to approve it.
+5. **D5. Answer.**
+   - *Go live: which exchange account should we use?* ends with a question in *Needs you*. Click it, then click one of the two options. The task continues and ends done.
+6. **D6. A new goal.**
+   - Click **New goal**, type `Measure a model's power on a phone`, keep "Let a planner agent split it into tasks" ticked, and press **Add goal**.
+   - A *Plan the work* task creates three tasks with dependencies. They run one after another, and the last one asks you.
+7. **D7. Abandon and retry.**
+   - Click *Build a first version*, press **Abandon…**, then **Abandon and keep the lesson**. A proposed lesson appears on the goal and in *Needs you*. Click it and press **Confirm**.
+   - On the goal's panel, type a title under **Try another way** (or add a task) and watch it start.
+8. **D8. Undo and the Code tab.**
+   - Open any task, expand **History** and press **undo** on a change.
+   - The *Code* line in a task's panel opens that task's branch in the **Code** tab: the same checkpoints and diffs as Part A.
+
+**With real agents.** In your practice repository from Part B, run `turtle ui` (without `--demo-agent`). The repository gets a project in `~/.turtle/projects/<name>`. Click **New goal** and give it a small, real goal. The planner and the tasks are Claude Code agents, so they cost money (set `maxBudgetUsd` in the project's `turtle-project.json` under `defaults`). Untick *Auto-start ready tasks* if you want to start each task yourself.
+
+---
+
 ## Part C — Optional: Docker sandbox
 
 If you install Docker Desktop or OrbStack, agents can run in containers that cannot see your `.git`. Build the runner image:
@@ -320,12 +358,14 @@ Mac: (chip, macOS version)   Node: (version)   Auth: subscription token / API ke
 Part A:  A1 [ ]  A2 [ ]  A3 [ ]  A4 [ ]  A5 [ ]  A6 [ ]  A7 [ ]  A8 [ ]
 Part B:  U1 [ ]  U2 [ ]  U3 [ ]  U4 [ ]  U5 [ ]  U6 [ ]   B7 export [ ]   B8 doctor OK [ ]
 Part C:  (skipped / worked / problem)
+Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]
 
 1. Could you keep up with what the agents were doing? Where did you lose track?
 2. What did you look for on screen and not find?
 3. Were the checkpoint summaries useful? Too many / too few checkpoints?
 4. Anything confusing about continue vs fork?
-5. Bugs (what you did, what happened, screenshot):
+5. Task graph: could you tell what each agent did and why, without opening the Code tab?
+6. Bugs (what you did, what happened, screenshot):
 ```
 
 For bugs, also attach:

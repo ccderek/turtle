@@ -12,7 +12,9 @@ import {
   git,
   HeuristicSummarizer,
   mergeConfig,
+  Project,
   RunSession,
+  startTaskRun,
   TurtleDb,
 } from "../packages/core/dist/index.js";
 
@@ -49,61 +51,165 @@ const run = async (prompt, script, extra = {}) => {
   return { s, out: await s.done };
 };
 
-// 1. New branch: the agent adds a flag, then asks a question.
-const first = await run("Add a --json option to the exporter", async (a) => {
-  await a.say("I'll look at the exporter first.");
-  await a.tool("Read", { file_path: "export.js" });
-  await a.edit(
-    "export.js",
-    "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data);\n  return String(data);\n}\n",
-  );
-  await a.edit(
-    "cli.js",
-    "import { exportData } from './export.js';\nconst json = process.argv.includes('--json');\nconsole.log(exportData({ a: 1 }, { json }));\n",
-  );
-  await a.tool("Bash", { command: "npm test" }, { response: { stdout: "3 passed" } });
-  await a.checkpoint(
-    "Add --json option parsing\n\nexportData() takes { json } and cli.js reads --json.",
-  );
-  await a.edit(
-    "export.js",
-    "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data, null, opts.pretty ? 2 : 0);\n  return String(data);\n}\n",
-  );
-  await a.checkpoint("Should --json pretty-print by default?", "need_decision");
-  await a.finish("Should --json pretty-print by default?");
-});
-const decl = db.listNodes({ branchId: first.s.branchId, kinds: ["semantic"] })[0];
-
-// 2. The human answers; the same branch continues.
-await run(
-  "Yes, pretty-print by default",
-  async (a) => {
+const ui = process.argv.includes("--ui");
+let first;
+let decl;
+if (ui) {
+  await seedGraph();
+} else {
+  // 1. New branch: the agent adds a flag, then asks a question.
+  first = await run("Add a --json option to the exporter", async (a) => {
+    await a.say("I'll look at the exporter first.");
+    await a.tool("Read", { file_path: "export.js" });
     await a.edit(
       "export.js",
-      "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data, null, opts.pretty === false ? 0 : 2);\n  return String(data);\n}\n",
+      "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data);\n  return String(data);\n}\n",
     );
-    await a.edit("README.md", "Use --json for pretty JSON output.\n");
-    await a.finish("Done: --json pretty-prints by default.");
-  },
-  { from: db.getBranch(first.s.branchId).headNodeId },
-);
-
-// 3. A different approach forked from the first checkpoint.
-await run(
-  "Instead, add a separate --format=json|text option",
-  async (a) => {
     await a.edit(
       "cli.js",
-      "import { exportData } from './export.js';\nconst f = (process.argv.find((x) => x.startsWith('--format=')) ?? '--format=text').slice(9);\nconsole.log(exportData({ a: 1 }, { json: f === 'json' }));\n",
+      "import { exportData } from './export.js';\nconst json = process.argv.includes('--json');\nconsole.log(exportData({ a: 1 }, { json }));\n",
     );
-    await a.tool("Bash", { command: "npm test" }, { response: "1 failed", failed: true });
-    await a.checkpoint("Add --format option (tests failing)", "blocked");
-    await a.finish("Tests fail because the fixture expects --json.");
-  },
-  { from: decl.id, name: "format-flag" },
-);
+    await a.tool("Bash", { command: "npm test" }, { response: { stdout: "3 passed" } });
+    await a.checkpoint(
+      "Add --json option parsing\n\nexportData() takes { json } and cli.js reads --json.",
+    );
+    await a.edit(
+      "export.js",
+      "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data, null, opts.pretty ? 2 : 0);\n  return String(data);\n}\n",
+    );
+    await a.checkpoint("Should --json pretty-print by default?", "need_decision");
+    await a.finish("Should --json pretty-print by default?");
+  });
+  decl = db.listNodes({ branchId: first.s.branchId, kinds: ["semantic"] })[0];
 
-if (process.argv.includes("--ui")) {
+  // 2. The human answers; the same branch continues.
+  await run(
+    "Yes, pretty-print by default",
+    async (a) => {
+      await a.edit(
+        "export.js",
+        "export function exportData(data, opts = {}) {\n  if (opts.json) return JSON.stringify(data, null, opts.pretty === false ? 0 : 2);\n  return String(data);\n}\n",
+      );
+      await a.edit("README.md", "Use --json for pretty JSON output.\n");
+      await a.finish("Done: --json pretty-prints by default.");
+    },
+    { from: db.getBranch(first.s.branchId).headNodeId },
+  );
+
+  // 3. A different approach forked from the first checkpoint.
+  await run(
+    "Instead, add a separate --format=json|text option",
+    async (a) => {
+      await a.edit(
+        "cli.js",
+        "import { exportData } from './export.js';\nconst f = (process.argv.find((x) => x.startsWith('--format=')) ?? '--format=text').slice(9);\nconsole.log(exportData({ a: 1 }, { json: f === 'json' }));\n",
+      );
+      await a.tool("Bash", { command: "npm test" }, { response: "1 failed", failed: true });
+      await a.checkpoint("Add --format option (tests failing)", "blocked");
+      await a.finish("Tests fail because the fixture expects --json.");
+    },
+    { from: decl.id, name: "format-flag" },
+  );
+}
+
+/**
+ * The task-graph demo (phase2): a trading system goal where approach A was tried,
+ * failed out of sample, and was abandoned into a lesson; approach B waits to start from
+ * the checkpoint before A. With `turtle ui --demo-agent`, B starts on its own, then the
+ * tasks that depend on it, and the last one asks you a question.
+ */
+async function seedGraph() {
+  const project = await Project.ensureForRepo(store);
+  const seedRun = async (taskId, script) => {
+    const r = await startTaskRun(project, taskId, {
+      config,
+      summarizer: new HeuristicSummarizer(),
+      launcherFor: () => fakeLauncher(script),
+    });
+    await r.session.done;
+    r.close();
+  };
+  const task = (parentId, title, extra = {}) =>
+    project.createConcept({ kind: "task", parentId, title, assignee: { type: "agent" }, ...extra });
+
+  const goal = await project.createConcept({
+    kind: "goal",
+    parentId: null,
+    title: "Build a trading system that trades every 8 hours",
+    body: "Data feed, positions and execution; most details are still open.",
+  });
+  await project.createConcept({
+    kind: "decision",
+    parentId: goal.id,
+    title: "Market: BTC/ETH spot (decided on day 1)",
+  });
+
+  const feed = await task(goal.id, "Data feed: pull prices and store history");
+  await seedRun(feed.id, async (a) => {
+    await a.edit("feed/pull.py", "def pull(): ...  # every minute, with retries\n");
+    await a.writeFile("results/feed-check.csv", "minute,requests,errors\n1,1180,0\n2,1200,0\n");
+    await a.graph("finding", {
+      text: "The exchange API allows 1200 requests per minute",
+      evidence: [{ path: "results/feed-check.csv" }],
+    });
+    await a.checkpoint("Data feed with retries", "done");
+    await a.graph("brief", {
+      text: "Done. Pulls 1-minute bars; 2 years of history stored outside git. Rate limit measured: 1200/min.",
+    });
+    await a.finish();
+  });
+
+  const signal = await task(goal.id, "Investment signal: decide when to buy and sell", {
+    dependsOn: [feed.id],
+  });
+  let approachA = "";
+  await seedRun(signal.id, async (a) => {
+    await a.edit("signal/backtest.py", "def backtest(strategy, bars): ...\n");
+    await a.checkpoint("Signal framework and backtester (r1)", "progress");
+    approachA = (
+      await a.graph("task", {
+        op: "create",
+        title: "Approach A: news sentiment",
+        startFrom: "here",
+      })
+    ).id;
+    await a.graph("brief", {
+      text: "Framework and backtester ready (checkpoint r1). Trying approaches below it.",
+    });
+    await a.finish();
+  });
+
+  await seedRun(approachA, async (a) => {
+    await a.edit("signal/sentiment.py", "def features(day): ...  # uses that day's news\n");
+    await a.writeFile(
+      "results/a-out-of-sample.csv",
+      "period,sharpe\nin-sample,2.1\nout-of-sample,-0.3\n",
+    );
+    await a.graph("finding", { text: "In-sample Sharpe 2.1" });
+    await a.graph("finding", {
+      text: "Out-of-sample Sharpe -0.3: the features used news published after the close (look-ahead)",
+      evidence: [{ path: "results/a-out-of-sample.csv" }],
+    });
+    await a.checkpoint("Approach A evaluated: fails out of sample", "blocked");
+    await a.graph("brief", {
+      text: "Blocked. Looked great in sample (2.1) but -0.3 out of sample: look-ahead in the news features.",
+    });
+    await a.finish("Approach A does not hold up.");
+  });
+  await project.abandonTask(approachA, {
+    lesson:
+      "Only use data known before the close of t-1, and always keep 6 months out of sample. An in-sample Sharpe alone proves nothing.",
+  });
+  const b = await project.retryTask(signal.id, "Approach B: price momentum", {
+    body: "Use price momentum. Validate out of sample from the start.",
+  });
+  const sched = await task(goal.id, "Schedule: run the strategy every 8 hours", {
+    dependsOn: [b.id],
+  });
+  await task(goal.id, "Go live: which exchange account should we use?", { dependsOn: [sched.id] });
+}
+
+if (ui) {
   db.close();
   console.log(
     `demo repo: ${repo}\nstarting the web UI with a scripted demo agent (Ctrl-C to stop)…`,

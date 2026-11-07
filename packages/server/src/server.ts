@@ -33,6 +33,7 @@ import type {
   TranscriptResponse,
 } from "./api.js";
 import { graphRoutes, RouteError } from "./graph-routes.js";
+import { TaskRunner } from "./tasks.js";
 import { StateBuilder, transcriptItems } from "./views.js";
 
 const POLL_MS = 250;
@@ -57,6 +58,8 @@ export interface ServerOptions {
   log?: (line: string) => void;
   /** The task graph this server serves (Phase 2). */
   project?: Project;
+  /** Override the project's auto-start default (tests). */
+  autoStart?: boolean;
 }
 
 export interface TurtleServer {
@@ -97,7 +100,21 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
   };
 
   // ------------------------------------------------------------ live loop
-  const graph = o.project ? graphRoutes(o.project) : null;
+  const taskRunner = o.project
+    ? new TaskRunner({
+        project: o.project,
+        config,
+        launcherFor: o.launcherFor,
+        summarizer: o.summarizer,
+        sessions,
+        ...(o.workspaceRoot ? { workspaceRoot: o.workspaceRoot } : {}),
+        onLog: (agentId, branchId, level, message) =>
+          broadcast({ type: "log", agentId, branchId, level, message }),
+        log,
+      })
+    : null;
+  if (taskRunner && o.autoStart !== undefined) taskRunner.autoStart = o.autoStart;
+  const graph = o.project ? graphRoutes(o.project, taskRunner) : null;
   const changeToken = () => `${db.changeToken()}|${o.project?.db.changeToken() ?? ""}`;
   let lastToken = changeToken();
   let stopSeq = db.listEvents({ type: "stop_request" }).at(-1)?.seq ?? 0;
@@ -114,6 +131,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
     broadcast({ type: "change" });
   }, POLL_MS);
   let reconciling = false;
+  const schedulerTimer = setInterval(() => void taskRunner?.tick(), 5000);
   const reconcileTimer = setInterval(() => {
     if (reconciling) return;
     reconciling = true;
@@ -458,6 +476,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       closing ??= (async () => {
         clearInterval(poll);
         clearInterval(reconcileTimer);
+        clearInterval(schedulerTimer);
         clearInterval(heartbeat);
         const running = [...sessions.values()];
         for (const s of running) s.interrupt();

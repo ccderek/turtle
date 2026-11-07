@@ -132,8 +132,17 @@ export class TaskRunBinding implements TaskBinding {
           );
         const title = str("title");
         if (!title) throw new OpsError("a title is required");
-        const parentId = args.parentId ? p.resolveConcept(String(args.parentId)).id : this.taskId;
-        if (this.depthBelowTask(parentId) + 1 > MAX_DEPTH_BELOW)
+        const planner = this.task.role === "planner" && this.task.parentId;
+        const parentId = args.parentId
+          ? p.resolveConcept(String(args.parentId)).id
+          : planner
+            ? (this.task.parentId as string)
+            : this.taskId;
+        // A planner fills in its goal: its tasks go next to it.
+        if (
+          !(planner && parentId === this.task.parentId) &&
+          this.depthBelowTask(parentId) + 1 > MAX_DEPTH_BELOW
+        )
           throw new OpsError(`subtasks may be at most ${MAX_DEPTH_BELOW} levels below your task`);
         const dependsOn = Array.isArray(args.dependsOn)
           ? (args.dependsOn as unknown[]).map((d) => p.resolveConcept(String(d)).id)

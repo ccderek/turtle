@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 /** Scripts are picked per run from a queue the test fills. */
-async function setup(opts: { failLaunch?: boolean; project?: boolean } = {}) {
+async function setup(opts: { failLaunch?: boolean; project?: boolean; autoStart?: boolean } = {}) {
   const repo = await mkdtemp(join(tmpdir(), "turtle-srv-"));
   await git(["init", "-q", "-b", "main"], { cwd: repo });
   await writeFile(join(repo, "a.txt"), "a\n");
@@ -58,7 +58,7 @@ async function setup(opts: { failLaunch?: boolean; project?: boolean } = {}) {
     ? await Project.ensureForRepo(store, { home: await mkdtemp(join(tmpdir(), "turtle-home-")) })
     : undefined;
   const server = await startServer({
-    ...(project ? { project } : {}),
+    ...(project ? { project, autoStart: opts.autoStart ?? false } : {}),
     store,
     db,
     config,
@@ -412,11 +412,11 @@ describe("turtle ui server", () => {
       })
     ).body;
     const d = (
-      await t.api<Concept>(`/api/questions/${q.id}/answer`, {
+      await t.api<{ decision: Concept }>(`/api/questions/${q.id}/answer`, {
         method: "POST",
         body: { text: "USB" },
       })
-    ).body;
+    ).body.decision;
     expect(d).toMatchObject({ kind: "decision", title: "USB", parentId: task.id });
     const detail = (await t.api<ConceptDetailResponse>(`/api/concepts/${q.id}`)).body;
     expect(detail.concept.answer?.text).toBe("USB");
@@ -437,6 +437,109 @@ describe("turtle ui server", () => {
         })
       ).status,
     ).toBe(400);
+    t.project?.close();
+  });
+
+  it("runs tasks from the browser: start, question, answer and continue, tell, pause, abandon, retry", async () => {
+    const t = await setup({ project: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "Trade every 8 hours" },
+      })
+    ).body.goal;
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Signal", assignee: { type: "agent" } },
+      })
+    ).body;
+    t.scripts.push(async (a) => {
+      await a.edit("framework.py", "r1\n");
+      await a.checkpoint("Framework r1", "progress");
+      await a.graph("question", { text: "Daily or hourly bars?" });
+      await a.finish("Daily or hourly?");
+    });
+    const started = await t.api<{ mode: string }>(`/api/tasks/${task.id}/start`, {
+      method: "POST",
+      body: {},
+    });
+    expect(started.body.mode).toBe("new");
+    const conceptStatus = async (id: string, status: string) =>
+      t.waitFor(
+        async () =>
+          (await t.api<ConceptDetailResponse>(`/api/concepts/${id}`)).body.concept.status ===
+          status,
+      );
+    await conceptStatus(task.id, "need_decision");
+    const graph = (await t.api<GraphResponse>("/api/graph")).body;
+    const q = graph.concepts.find((c) => c.kind === "question");
+
+    // Answering continues the same branch with the answer.
+    let continued = "";
+    t.scripts.push(async (a) => {
+      continued = a.prompt;
+      await a.edit("bars.py", "daily\n");
+      await a.checkpoint("Daily bars", "done");
+      await a.finish();
+    });
+    const ans = await t.api<{ started: { mode: string } }>(`/api/questions/${q?.id}/answer`, {
+      method: "POST",
+      body: { text: "Daily" },
+    });
+    expect(ans.body.started.mode).toBe("continue");
+    await conceptStatus(task.id, "done");
+    expect(continued).toContain("Daily or hourly bars? → Daily");
+
+    // A second task: tell it something while it works, then pause it.
+    const b = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Approach A", assignee: { type: "agent" } },
+      })
+    ).body;
+    const heard: string[] = [];
+    t.scripts.push(async (a) => {
+      await a.edit("a.txt", "a\n");
+      for (;;) {
+        await a.tool("Read", { file_path: "a.txt" });
+        heard.push(...a.instructions.splice(0));
+      }
+    });
+    await t.api(`/api/tasks/${b.id}/start`, { method: "POST", body: {} });
+    await conceptStatus(b.id, "running");
+    await t.api(`/api/tasks/${b.id}/tell`, {
+      method: "POST",
+      body: { text: "Use 6 months out of sample" },
+    });
+    await t.waitFor(async () => heard.length > 0);
+    expect(heard).toEqual(["Use 6 months out of sample"]);
+    await t.api(`/api/tasks/${b.id}/pause`, { method: "POST", body: {} });
+    await conceptStatus(b.id, "paused");
+
+    // Abandon it into a lesson, and retry under the goal.
+    const ab = await t.api<{ lesson: Concept }>(`/api/tasks/${b.id}/abandon`, {
+      method: "POST",
+      body: { lesson: "Look-ahead bias: only use data known before t-1" },
+    });
+    expect(ab.body.lesson).toMatchObject({
+      kind: "lesson",
+      parentId: goal.id,
+      lessonState: "confirmed",
+    });
+    const retry = await t.api<Concept>(`/api/nodes-retry/${goal.id}`, {
+      method: "POST",
+      body: { title: "Approach B" },
+    });
+    expect(retry.body).toMatchObject({ kind: "task", parentId: goal.id });
+    const detail = (await t.api<ConceptDetailResponse>(`/api/concepts/${retry.body.id}`)).body;
+    expect(detail.lessons.map((l) => l.title)).toEqual([
+      "Look-ahead bias: only use data known before t-1",
+    ]);
+
+    const act = (await t.api<{ text: string; byAgent: boolean }[]>("/api/activity")).body;
+    expect(act.some((x) => x.byAgent && x.text.startsWith("asked:"))).toBe(true);
+    expect(act.some((x) => !x.byAgent && x.text.startsWith("added a lesson"))).toBe(true);
     t.project?.close();
   });
 });

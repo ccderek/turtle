@@ -1,4 +1,4 @@
-// Drives the web UI end to end in headless Chromium against the offline demo (scripted
+// Drives the Code view end to end in headless Chromium against the offline demo (scripted
 // agent, no API key) and saves screenshots. Usage: pnpm build && pnpm ui:smoke [outDir]
 // Needs a global Playwright with Chromium (npm i -g playwright && npx playwright install chromium).
 import { spawn } from "node:child_process";
@@ -55,6 +55,8 @@ const step = (s) => console.log(`- ${s}`);
 try {
   step("home: tree and attention queue");
   await page.goto(url);
+  // The demo has a project, so the page opens on Tasks (see ui-smoke-tasks.mjs).
+  await page.getByRole("tab", { name: "Code" }).click();
   await page.waitForSelector(".row");
   await page.waitForSelector(".conn.live");
   await shot("01-home");

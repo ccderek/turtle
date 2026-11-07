@@ -2,9 +2,9 @@
 
 A human–AI interface and version-control layer for AI coding agents: every step an agent takes becomes a checkpoint in a tree you can inspect, fork, and steer.
 
-Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented; next is the task graph, a mind map of tasks shared by humans and agents ([docs/phase2-spec.md](docs/phase2-spec.md), architecture v0.3). Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
+Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented. Phase 2, the task graph (a mind map of tasks that humans and agents both edit, versioned as an operation log), is in progress: projects, multi-source runs, agent graph tools, lessons, abandon/retry, steering running agents, an in-process scheduler and a first task-graph view are built ([docs/phase2-spec.md](docs/phase2-spec.md), architecture v0.3). Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
 
-![turtle ui](docs/images/ui-question.png)
+![task graph](docs/images/tasks-graph.png)
 
 ## Try it
 
@@ -13,7 +13,7 @@ Requires Node.js ≥ 22, pnpm, git ≥ 2.31, and optionally Docker (for `--sandb
 ```bash
 pnpm install
 pnpm build
-pnpm demo:ui                  # offline: a demo tree in the web UI, with scripted agents
+pnpm demo:ui                  # offline: a demo task graph and run tree in the web UI, scripted agents
 pnpm demo                     # the same tree, shown with the CLI
 pnpm docker:build             # runner image for --sandbox docker
 ```
@@ -23,7 +23,10 @@ In any git repository:
 ```bash
 alias turtle="node /path/to/turtle/packages/cli/dist/main.js"
 turtle init                                   # creates turtle.config.json
-turtle ui                                     # web UI at http://127.0.0.1:4317
+turtle ui                                     # web UI at http://127.0.0.1:4317 (Tasks and Code tabs)
+turtle goal "Build a trading system"          # a goal; `turtle graph` shows the task graph
+turtle task add "Data feed" && turtle task start <task>
+turtle tell <task> "Also log every trade"     # steer a running task
 turtle run "Add a --json flag to the exporter"
 turtle status                                 # what is running, what waits for you
 turtle run --from <node> "Yes, pretty-print"  # answer a question / continue a branch
@@ -45,7 +48,7 @@ pnpm typecheck
 pnpm bench:snapshot   # snapshot latency on a synthetic 10k-file repo
 pnpm e2e              # real API run with Haiku: new → need_decision → continue → fork (~$0.02)
 pnpm docker:smoke     # docker sandbox mechanics, no API calls
-pnpm ui:smoke         # headless Chromium drives the demo UI end to end (needs a global playwright)
+pnpm ui:smoke         # headless Chromium drives the Code and Tasks views end to end (needs a global playwright)
 pnpm --filter @turtle/web dev   # UI dev server proxying to `turtle ui --port 4317`
 ```
 

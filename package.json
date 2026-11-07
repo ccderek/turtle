@@ -19,7 +19,7 @@
     "docker:build": "pnpm build && node scripts/docker-build.mjs",
     "docker:smoke": "node scripts/docker-smoke.mjs",
     "demo:ui": "pnpm build && node scripts/demo.mjs --ui",
-    "ui:smoke": "node scripts/ui-smoke.mjs"
+    "ui:smoke": "node scripts/ui-smoke.mjs && node scripts/ui-smoke-tasks.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

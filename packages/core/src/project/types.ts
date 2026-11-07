@@ -52,6 +52,8 @@ export interface ConceptFields {
   sources?: string[];
   resources?: string[];
   startFrom?: StartFrom | null;
+  /** A planner task splits its goal: its agent may create tasks next to itself. */
+  role?: "planner";
   /** Code branches this task's work landed on, one per source. */
   branches?: { source: string; branch: string }[];
   brief?: string;
