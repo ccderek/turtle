@@ -156,12 +156,12 @@ interface Operation {
 ```ts
 interface ConceptFields {
   id: string;                      // c_ + random
-  kind: "goal" | "task" | "finding" | "decision" | "question" | "output";
+  kind: "goal" | "task" | "finding" | "decision" | "question" | "output" | "lesson";
   parentId: string | null;
   title: string;                   // one line
   body: string;                    // markdown
   // task
-  status?: "todo" | "running" | "paused" | "need_decision" | "blocked" | "done" | "failed" | "dropped";
+  status?: "todo" | "running" | "paused" | "need_decision" | "blocked" | "done" | "failed" | "abandoned" | "dropped";
   assignee?: { type: "agent" } | { type: "member"; id: string } | null;   // agent = turtle starts one
   dependsOn?: string[];
   sources?: string[];              // source ids the task works in; default: all
@@ -172,6 +172,8 @@ interface ConceptFields {
   answer?: { text: string; by: string; at: string } | null;
   // output
   path?: string; sha256?: string; size?: number;
+  // lesson: applies to the subtree of parentId
+  lessonState?: "proposed" | "confirmed" | "superseded";
   // shared
   brief?: string;                  // task only: the living summary (§10)
   order?: string;                  // fractional index among siblings
@@ -189,6 +191,7 @@ The current version of a concept is the number of operations applied to it.
 | `need_decision` → `running` | The human's answer: the answer is written to the question, a `decision` concept is created (author: the member), and the agent continues |
 | `running` → `done` / `blocked` / `failed` | The run's outcome (Phase 0 `EndReason`) |
 | `running` → `paused` | A human pause. The agent is interrupted; resuming continues the branch |
+| any → `abandoned` | A human abandons an approach (§11.1). The record stays, the task is shown struck through, and a lesson is drafted |
 | any → `dropped` | A human drop. A running agent is stopped |
 
 `done` requires at least one evidence link (a checkpoint at minimum). A task finished without any is shown as **claimed**.
@@ -234,6 +237,7 @@ The prompt is assembled by the **context assembler** and kept compact:
 - the goal;
 - decisions on its ancestors;
 - the findings and outputs of the tasks it depends on (titles + one line each, with paths);
+- **the lessons in scope**: every non-superseded lesson on the task's ancestors, with where it came from ("from the abandoned *Approach A*");
 - the tool contract (§8).
 
 A forked task already carries its conversation, so it receives only what changed since its fork point.
@@ -250,7 +254,8 @@ The tools are added to runner-claude's MCP server and to the protocol as new req
 | `turtle_decision` | `{ text, rationale? }` | A decision the agent made, so pivots are visible |
 | `turtle_question` | `{ text, options? }` | A question; the task becomes `need_decision`; the reply tells the agent to end its turn |
 | `turtle_brief` | `{ text }` | Replaces the task's brief (§10) |
-| `turtle_graph` | `{ scope?: "task" \| "goal" }` | Compact text view of the relevant graph: own task, siblings' status, dependency findings, decisions. Default `task` |
+| `turtle_lesson` | `{ text, evidence? }` | Proposes a lesson on the parent of the current task (state `proposed` until a human confirms it) |
+| `turtle_graph` | `{ scope?: "task" \| "goal" }` | Compact text view of the relevant graph: own task, siblings' status, dependency findings, decisions, lessons in scope. Default `task` |
 
 System prompt additions (draft):
 
@@ -297,6 +302,18 @@ Notifications (D21): inform, never ask.
 Every delivery is an event (`instruction_queued`, `instruction_delivered` with the tool-use id), which gives G3.
 
 **Fallback.** If the hook path fails, the instruction is delivered by interrupt + continue with the instruction as the prompt. This is slower and loses the in-flight tool call.
+
+### 11.1 Abandon and retry (D28)
+
+| Step | What turtle does |
+|---|---|
+| **Abandon** *Approach A* | The task becomes `abandoned` (running agents are stopped). Subtasks, code and data are kept |
+| **Draft the lesson** | A `lesson` concept (state `proposed`), whose parent is the node the human rewinds to (default: A's parent). The body is drafted from A's findings, failed checks and last checkpoint summary, using the summarizer model when available and a plain template otherwise. Provenance links point to A and its evidence |
+| **Edit / confirm** | The human edits the text and confirms it (`confirmed`) |
+| **Retry** | A new sibling task *Approach B* with `startFrom` = a checkpoint of the parent taken before A started (by default the last checkpoint of the parent's branch older than A's first). Its files and conversation go back to that point, so it carries no A transcript. The context assembler injects the lessons in scope |
+| **Audit** | At each semantic checkpoint of B, the audit (§15, G2) also checks B's tool log and diff against each injected lesson. A violation is a finding marked `contradicts lesson`, and it goes to *Needs you* |
+
+CLI: `turtle task abandon <task> [--lesson "<text>"] [--on <node>]` and `turtle task retry <node> "<title>" [--from <checkpoint>]`. UI: **Abandon…** on a task opens the drafted lesson for editing; **Try another way from here** on the parent.
 
 ## 12. UI
 
@@ -400,5 +417,6 @@ turtle stats --gate                        # G1–G4 (§15)
 - **No resource locks yet.** Two tasks can still use one phone at once. The UI warns when two running tasks list the same resource.
 - **Combining upstream code.** A task that depends on tasks in *different* branches of the same source starts from one of them; it gets the others' findings and outputs, not their code. Code merging is Phase 3.
 - **Hook delivery.** **VERIFY** that `additionalContext` from PostToolUse reaches the model *before* its next decision, and how a Stop-hook continuation is counted in `num_turns` and cost.
+- **Resources that need confirmation** (`confirm: always`, architecture D29) are recorded in Phase 2 but enforced in Phase 3, together with locks.
 - **Planner quality.** Whether agents split goals into good tasks is part of G2/G4. If not, the planner prompt becomes a configurable template.
 - **Migration** maps Phase 0–1 runs to tasks without findings; their briefs are generated from summaries.

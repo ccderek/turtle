@@ -83,6 +83,7 @@ Concept kinds are deliberately few:
 | **decision** | A choice made, and by whom ("3 runs × 5 min, cooldown 2 min") | Human answering a question, or agent |
 | **question** | Something only the human can decide; it blocks the task it belongs to | Agent |
 | **output** | A produced file: small ones are artifacts in git, large ones (model binaries, traces) live outside git and are recorded by path + sha256 | Agent |
+| **lesson** (v0.3) | A take-away from work that is kept but should not be repeated ("only use data known before the close of t-1"). It hangs on the node it applies to and holds for that whole subtree | turtle drafts it when an approach is abandoned; the human edits or confirms it; agents may propose one |
 
 Rules:
 
@@ -92,6 +93,12 @@ Rules:
   - `turtle_finding`, `turtle_decision` and `turtle_question` record the other concept kinds.
 - **The graph is the main screen (D18).** The code tree is a drill-down from a task.
 - **Reuse is explicit.** A task can start *from* another task's checkpoint ("Model B reuses the environment task"). This is a fork (§8): the new task inherits the files and the conversation up to that point.
+- **Abandon, learn, rewind (D28).** When an approach turns out wrong:
+  1. Its task is **abandoned**, not deleted. Its subtasks, code and data stay in the record.
+  2. turtle drafts a **lesson** from the abandoned task's findings, tool log and diff. The human edits it.
+  3. The lesson is attached to the node the human rewinds to.
+  4. The next attempt is a new sibling task that **starts from a checkpoint taken before the failed approach**. Its files and conversation go back to that point, so it carries none of the failed transcript, only the lessons.
+  5. Every task started anywhere under that node receives its lessons in its prompt. An audit checks its work against them, and a violation goes to *Needs you*.
 
 Worked example (from the first user scenario): measuring a model's power and performance on a phone.
 
@@ -158,13 +165,33 @@ turtle project "perf-lab"            (a git repository of its own: graph + op lo
   - Only editors start agents.
   - Instructions from others reach the agent through sync.
   - A **runner** is a machine that executes agents: a member's laptop, or a shared lab machine with the phones attached. The lab machine accepts tasks from members allowed to use it.
+- **Irreversible resources need a human (D29).** A resource can be marked `confirm: always`, for example a live trading account, production, a payment API. An agent that is about to use it stops and asks, and the question goes to *Needs you*. A human confirms each first use, plus any change of limits. This applies the §10 principle that irreversible actions require human confirmation.
 - **Agent-created tasks start immediately (D21).** Humans are notified instead of asked:
   - new nodes are flagged until seen;
   - notifications are batched in an *Activity* feed ("α added 3 subtasks"); *Needs you* holds only what blocks on a human (questions, blocked or failed tasks, budget limits);
   - every new task offers Pause and Drop;
   - budget, parallelism and depth caps queue the excess, and the UI says why it is queued.
 
-### 3.5 The core object model (v0.3)
+### 3.5 Memory is the graph (v0.3)
+
+**Decision (D30):** turtle has no separate memory store. The task graph is the memory.
+- Lessons, findings and decisions are concepts with provenance links (where they came from) and a scope (the subtree they apply to), so they already form a DAG.
+- They live in the operation log like every other edit: authored, versioned, undoable, synced.
+
+| Phase | Retrieval |
+|---|---|
+| 2 | **By scope**: a task gets the lessons on all its ancestors. Deterministic, cheap, hard to get wrong |
+| 3 | **Project search**: an agent asks for related lessons and findings anywhere in the project (`turtle_lessons(query)`). The search index (text or embeddings) is a rebuildable cache, never the source of truth |
+| 5 | **Across projects and people**: shared lesson libraries ("always validate out of sample"), through the turtle server and roles |
+
+A lesson carries:
+- its evidence;
+- who confirmed it;
+- its status: `proposed` (by an agent), `confirmed` (by a human) or `superseded` (by a later finding, which links to it).
+
+Superseded lessons are no longer injected.
+
+### 3.6 The core object model (v0.3)
 
 **Decision (D27):** like git's objects and refs, turtle's core is small, and everything else is built on it.
 
@@ -622,6 +649,11 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
     - when the logs merge, the second claim becomes a visible conflict instead of a duplicate run.
 25. **Secrets in shared nodes.** Transcripts and tool output can contain tokens and internal paths. Briefs share summaries and evidence only, and a share preview shows exactly what leaves the machine.
 26. **Scope.** Sync, permissions and a server are large and do not differentiate turtle. They wait for the Phase 2 gate (§2.1, §15).
+27. **Wrong or stale lessons spread.** A lesson injected into every task below a node multiplies its mistakes. Mitigations:
+    - lessons carry evidence and a confirmer;
+    - agents' lessons stay `proposed` until a human confirms them;
+    - a later finding can supersede a lesson;
+    - injected lessons are listed in each task's detail, so the human sees exactly what an agent was told.
 
 ---
 
@@ -631,8 +663,8 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 |---|---|---|
 | **0 Record** | CLI wrapping Claude Agent SDK + workspace dir + container + hooks + `turtle` MCP tools → write to `refs/turtle/*` and SQLite. Spec: [phase0-spec.md](./phase0-spec.md) | Data model, checkpoint granularity |
 | **1 Web UI** | Web: attention queue, tree, node detail (diff / summary / artifacts), live stream, plus the Phase 0 actions (run / answer / fork / stop / tag / export). Spec: [phase1-spec.md](./phase1-spec.md) | Can a human keep up with the AI? |
-| **2 Task graph (single user)** | A turtle project above repositories (several attached repos, multi-repo checkpoints). Concept store with an operation log that is multi-user-ready, plus MCP tools for agents. **Mind map as the main screen**. Humans add, edit and drop tasks. Agent-created tasks start at once (a minimal scheduler: dependencies done + parallelism cap), with notifications, Pause and Drop. A task runs one agent; starting from another task's checkpoint is a fork. **Stop and redirect from the graph.** Node briefs and static export. Phase 0–1 runs import as tasks. Spec: [phase2-spec.md](./phase2-spec.md) | Is the graph a faithful, rewindable, shareable record of the work? **Gate for Phase 4**, measured passively from the records: (G1) rewindable, meaning checkpoints resumable and forks succeed; (G2) truthful, meaning evidence ratio and audit agreement; (G3) shareable, meaning exported briefs stand on their own; (G4) affordable, meaning tokens per finished task |
-| **3 Parallel tasks & explore** | Full scheduler (a background daemon, budgets across tasks). Resources with locks and queues. Output store outside git. Combining upstream work (outputs by path, code via a merge agent). Explore = N sibling tasks plus a compare view. Sharing failed attempts across tasks | Value and cost of parallel and alternative work |
+| **2 Task graph (single user)** | A turtle project above repositories (several attached repos, multi-repo checkpoints). Concept store with an operation log that is multi-user-ready, plus MCP tools for agents. **Mind map as the main screen**. Humans add, edit and drop tasks. Agent-created tasks start at once (a minimal scheduler: dependencies done + parallelism cap), with notifications, Pause and Drop. A task runs one agent; starting from another task's checkpoint is a fork. **Stop and redirect from the graph.** Abandon an approach with a lesson and retry from an earlier checkpoint. Node briefs and static export. Phase 0–1 runs import as tasks. Spec: [phase2-spec.md](./phase2-spec.md) | Is the graph a faithful, rewindable, shareable record of the work? **Gate for Phase 4**, measured passively from the records: (G1) rewindable, meaning checkpoints resumable and forks succeed; (G2) truthful, meaning evidence ratio and audit agreement; (G3) shareable, meaning exported briefs stand on their own; (G4) affordable, meaning tokens per finished task |
+| **3 Parallel tasks & explore** | Full scheduler (a background daemon, budgets across tasks). Resources with locks and queues. Output store outside git. Combining upstream work (outputs by path, code via a merge agent). Explore = N sibling tasks plus a compare view. Project-wide lesson search (§3.5). Resources marked `confirm: always` | Value and cost of parallel and alternative work |
 | **4 Many people** | Replicas synced through a git remote (per-replica op refs, merge of logs, surfaced conflicts). Roles on projects and subtrees. Agents on behalf of members. Requests from commenters | Can several people steer one graph without stepping on each other? |
 | **5 turtle server** | Live share links, per-node permissions, comments from people without turtle, shared runners (e.g. a lab machine with phones) | Sharing nodes instead of documents |
 | **6 Depth** | human_edit with downstream rebase, L0/L1 adapters for other agents and models, token optimization across tasks, scale-up work (§13) | Generality and cost |
@@ -670,6 +702,9 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D25 | Permissions | Roles owner / editor / commenter / viewer on a project or subtree; commenter requests need the task owner's acceptance |
 | D26 | Agent identity | An agent acts on behalf of one member, on a runner that member may use (own machine or a shared lab runner); only editors start agents |
 | D27 | Core | Concepts + operations + links + checkpoints form the core; scheduling, UI, notifications and permissions are built on top |
+| D28 | Failed approaches | Abandon, do not delete; turtle drafts a lesson, the human edits it; the lesson hangs on the node rewound to; the retry is a sibling task forked from a checkpoint before the failure and receives the lessons, audited against them |
+| D29 | Irreversible resources | Resources can require confirmation (`confirm: always`); agents stop and ask before using them |
+| D30 | Memory | The task graph is the memory: lessons, findings, decisions with provenance and scope; retrieval by scope (Phase 2), project search over a rebuildable index (Phase 3), shared across projects later (Phase 5) |
 
 ## 17. TODO
 
