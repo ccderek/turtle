@@ -108,7 +108,8 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
     for (const e of db.listEvents({ type: "stop_request", afterSeq: stopSeq })) {
       stopSeq = e.seq;
       const s = e.agentId ? sessions.get(e.agentId) : undefined;
-      if (s) s.interrupt();
+      // The session also sees the request at its next tool boundary; never interrupt twice.
+      if (s && !s.interrupting) s.interrupt();
     }
     broadcast({ type: "change" });
   }, POLL_MS);

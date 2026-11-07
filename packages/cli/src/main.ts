@@ -10,9 +10,11 @@ import {
   taskAbandonCommand,
   taskAddCommand,
   taskDropCommand,
+  taskPauseCommand,
   taskRetryCommand,
   taskShowCommand,
   taskStartCommand,
+  tellCommand,
   undoCommand,
 } from "./commands/graph.js";
 import { logCommand, showCommand, statsCommand, statusCommand } from "./commands/inspect.js";
@@ -153,6 +155,17 @@ task
   .action(async (ref: string, o: TaskStartOptions) => {
     process.exitCode = await taskStartCommand(cwd(), ref, o);
   });
+task
+  .command("pause")
+  .description("stop the task's agent at its next tool boundary; resume with task start")
+  .argument("<task>")
+  .action(async (ref: string) => print(await taskPauseCommand(cwd(), ref)));
+program
+  .command("tell")
+  .description("tell a running task's agent something; it arrives at its next tool call")
+  .argument("<task>")
+  .argument("<text>")
+  .action(async (ref: string, text: string) => print(await tellCommand(cwd(), ref, text)));
 task
   .command("abandon")
   .description("give up an approach: keep its record, turn what it taught into a lesson")

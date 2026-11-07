@@ -10,6 +10,7 @@ import type {
   GraphOp,
   GraphReply,
   HistoryEntry,
+  HookReply,
   RunnerRequest,
   RunnerStartOptions,
   ToRunner,
@@ -38,6 +39,8 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 export class FakeAgent {
   readonly sessionId: string;
   interrupted = false;
+  /** Instructions delivered by the orchestrator at tool boundaries or on stop. */
+  readonly instructions: string[] = [];
   private reqSeq = 0;
   private msgSeq = 0;
   private readonly pending = new Map<
@@ -67,6 +70,8 @@ export class FakeAgent {
       this.pending.delete(msg.id);
       if (msg.ok) p?.resolve(msg.result);
       else p?.reject(new Error(msg.error));
+    } else if (msg.t === "user") {
+      this.instructions.push(msg.text);
     } else if (msg.t === "interrupt") {
       this.interrupted = true;
       for (const w of this.interruptWaiters) w();
@@ -166,7 +171,7 @@ export class FakeAgent {
     };
     if (opts.agentId) (req as { agentId?: string }).agentId = opts.agentId;
     if (opts.failed) (req as { failed?: boolean }).failed = true;
-    await this.request(req);
+    await this.request<HookReply>(req);
     this.sdk({
       type: "user",
       message: {
@@ -194,7 +199,7 @@ export class FakeAgent {
     this.assistant([{ type: "tool_use", id: toolUseId, name: "mcp__turtle__checkpoint", input }]);
     // Like runner-claude, the request does not carry the tool_use id; the orchestrator matches it.
     const reply = await this.request<CheckpointReply>({ kind: "checkpoint", ...input });
-    await this.request({
+    await this.requestNoting({
       kind: "post_tool_use",
       toolName: "mcp__turtle__checkpoint",
       toolUseId,
@@ -220,7 +225,7 @@ export class FakeAgent {
       { type: "tool_use", id: toolUseId, name: `mcp__turtle__${name}`, input: args },
     ]);
     const reply = await this.request<GraphReply>({ kind: "graph", op, args });
-    await this.request({
+    await this.requestNoting({
       kind: "post_tool_use",
       toolName: `mcp__turtle__${name}`,
       toolUseId,
@@ -251,11 +256,23 @@ export class FakeAgent {
     return new Promise((r) => this.interruptWaiters.push(r));
   }
 
-  /** End the turn: Stop hook, result message, exit. */
-  async finish(text?: string): Promise<void> {
+  /**
+   * End the turn: Stop hook, result message, exit. If the orchestrator answers the Stop
+   * hook with an instruction, the conversation goes on: no result is sent and the
+   * instruction is returned, so the script can act on it and call finish() again.
+   */
+  async finish(text?: string): Promise<string | undefined> {
     if (text) await this.say(text);
-    await this.request({ kind: "stop", lastAssistantMessage: text ?? "" });
+    const before = this.instructions.length;
+    await this.request<HookReply>({ kind: "stop", lastAssistantMessage: text ?? "" });
+    // A message that arrived with the stop starts one more turn.
+    if (this.instructions.length > before) return this.instructions.at(-1);
     this.result("success");
+    return undefined;
+  }
+
+  private async requestNoting(req: DistributiveOmit<RunnerRequest, "t" | "id">): Promise<void> {
+    await this.request<HookReply>(req);
   }
 
   result(subtype: string): void {
@@ -271,7 +288,7 @@ export class FakeAgent {
   }
 }
 
-export type FakeScript = (agent: FakeAgent) => Promise<void>;
+export type FakeScript = (agent: FakeAgent) => Promise<unknown>;
 
 export interface FakeLauncherOptions {
   /** Exit code returned for `exec` commands (tests / setup). */

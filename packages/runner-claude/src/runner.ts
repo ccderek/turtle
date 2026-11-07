@@ -19,6 +19,7 @@ import type {
   GraphOp,
   GraphReply,
   HistoryEntry,
+  HookReply,
   RunnerRequest,
   RunnerStartOptions,
   ToRunner,
@@ -62,6 +63,12 @@ export class ClaudeRunner {
   >();
   private q: Query | null = null;
   private closeInput: () => void = () => {};
+  /** Human messages waiting to be yielded into the SDK's streaming input. */
+  private readonly inbox: string[] = [];
+  private wakeInput: () => void = () => {};
+  /** A human message went into the SDK after the model's last output. */
+  private messageSinceOutput = false;
+  private closeTimer: NodeJS.Timeout | undefined;
   private started = false;
   private finished = false;
   private interrupted = false;
@@ -100,6 +107,10 @@ export class ClaudeRunner {
         return;
       case "interrupt":
         void this.interrupt();
+        return;
+      case "user":
+        this.inbox.push(msg.text);
+        this.wakeInput();
         return;
       case "shutdown":
         this.closeInput();
@@ -170,13 +181,24 @@ export class ClaudeRunner {
         this.closeInput = resolve;
       });
       this.q = this.deps.sdk.query({
-        prompt: userInput(prompt, inputDone),
+        prompt: this.userInput(prompt, inputDone),
         options: this.options(o),
       });
       for await (const msg of this.q as AsyncIterable<SDKMessage>) {
         this.deps.send({ t: "sdk", msg });
-        // One turn per run: close the input after the first result so the query ends.
-        if (msg.type === "result") this.closeInput();
+        if (msg.type === "assistant") this.messageSinceOutput = false;
+        if (msg.type !== "result") {
+          clearTimeout(this.closeTimer);
+          continue;
+        }
+        // Close the input after a result so the query ends, unless a human message is
+        // waiting or just went in as the turn ended: then give the next turn a moment
+        // to start (any new output cancels the close).
+        if (this.inbox.length) continue;
+        if (this.messageSinceOutput) {
+          clearTimeout(this.closeTimer);
+          this.closeTimer = setTimeout(() => this.closeInput(), 3000);
+        } else this.closeInput();
       }
       this.finish(this.interrupted ? 130 : 0);
     } catch (err) {
@@ -211,8 +233,9 @@ export class ClaudeRunner {
   }
 
   private readonly postToolUseHook: HookCallback = async (input) => {
+    let reply: HookReply | undefined;
     if (input.hook_event_name === "PostToolUse") {
-      await this.request({
+      reply = await this.request<HookReply>({
         kind: "post_tool_use",
         toolName: input.tool_name,
         toolUseId: input.tool_use_id,
@@ -222,7 +245,7 @@ export class ClaudeRunner {
       });
     } else if (input.hook_event_name === "PostToolUseFailure") {
       if (input.is_interrupt) return {};
-      await this.request({
+      reply = await this.request<HookReply>({
         kind: "post_tool_use",
         toolName: input.tool_name,
         toolUseId: input.tool_use_id,
@@ -232,18 +255,43 @@ export class ClaudeRunner {
         ...(input.agent_id ? { agentId: input.agent_id } : {}),
       });
     }
+    void reply;
     return {};
   };
 
   private readonly stopHook: HookCallback = async (input) => {
     if (input.hook_event_name === "Stop") {
-      await this.request({
+      await this.request<HookReply>({
         kind: "stop",
         lastAssistantMessage: input.last_assistant_message ?? "",
       });
     }
     return {};
   };
+
+  /**
+   * Streaming input: the prompt, then human messages as they arrive (genuine user turns,
+   * docs/phase2-spec.md §11), until `done` (also needed for interrupt()).
+   */
+  private async *userInput(prompt: string, done: Promise<void>): AsyncGenerator<SDKUserMessage> {
+    yield { type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null };
+    let finished = false;
+    void done.then(() => {
+      finished = true;
+      this.wakeInput();
+    });
+    for (;;) {
+      while (this.inbox.length) {
+        const text = this.inbox.shift() as string;
+        this.messageSinceOutput = true;
+        yield { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+      }
+      if (finished) return;
+      await new Promise<void>((r) => {
+        this.wakeInput = r;
+      });
+    }
+  }
 
   /** Task-graph tools (docs/phase2-spec.md §8); each forwards one `graph` request. */
   private graphToolDefs(
@@ -410,12 +458,6 @@ export class ClaudeRunner {
       ],
     });
   }
-}
-
-/** Streaming input: the prompt, then stay open until `done` (needed for interrupt()). */
-async function* userInput(prompt: string, done: Promise<void>): AsyncGenerator<SDKUserMessage> {
-  yield { type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null };
-  await done;
 }
 
 export function defaultExec(cmd: string, cwd: string, timeoutSec: number): Promise<ExecResult> {

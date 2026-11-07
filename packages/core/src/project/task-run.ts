@@ -6,9 +6,10 @@ import type { TurtleConfig } from "../config.js";
 import { TurtleDb } from "../db/db.js";
 import type { SandboxMode, TurtleNode } from "../db/types.js";
 import { GitStore } from "../git/store.js";
-import { checkpointOf, OpsError } from "../ops.js";
+import { checkpointOf, OpsError, requestStop } from "../ops.js";
 import {
   type GraphCallContext,
+  queueInstruction,
   type RunEvent,
   type RunOptions,
   type RunOutcome,
@@ -454,4 +455,71 @@ export async function startTaskRun(
 function firstLine(s: string): string {
   const l = (s.split("\n")[0] ?? "").trim();
   return l.length > 160 ? `${l.slice(0, 159)}…` : l;
+}
+
+/** The agent currently running a task, found through its primary branch. */
+async function runningAgentOf(project: Project, task: Concept) {
+  for (const b of task.branches ?? []) {
+    const source = project.config.sources.find((s) => s.id === b.source);
+    if (!source) continue;
+    const store = await GitStore.open(source.path);
+    const db = TurtleDb.open(join(store.turtleDir, "turtle.db"));
+    const agent = db
+      .listAgents({ branchId: b.branch })
+      .find((a) => a.status === "running" && a.adapter !== "companion");
+    if (agent) return { store, db, agent, branchId: b.branch };
+    db.close();
+  }
+  return null;
+}
+
+/**
+ * Tell a running task's agent something (docs/phase2-spec.md §11): delivered at its
+ * next tool boundary. Works across processes: the instruction goes through SQLite.
+ */
+export async function tellTask(
+  project: Project,
+  taskId: string,
+  text: string,
+): Promise<{ agentId: string }> {
+  const task = project.getConcept(taskId);
+  if (task?.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+  if (!text.trim()) throw new OpsError("an instruction is required");
+  const r = await runningAgentOf(project, task);
+  if (!r) throw new OpsError("the task has no running agent; start it with an instruction instead");
+  try {
+    queueInstruction(r.db, {
+      agentId: r.agent.id,
+      branchId: r.branchId,
+      text: text.trim(),
+      from: project.identity.name,
+    });
+    return { agentId: r.agent.id };
+  } finally {
+    r.db.close();
+  }
+}
+
+/** Pause (stop, keep the branch to continue later) or drop a running task. */
+export async function stopTask(
+  project: Project,
+  taskId: string,
+  o: { drop?: boolean } = {},
+): Promise<{ stopped: boolean }> {
+  const task = project.getConcept(taskId);
+  if (task?.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+  if (o.drop) await project.updateConcept(task.id, { status: "dropped" });
+  const r = await runningAgentOf(project, task);
+  if (!r) {
+    if (!o.drop && task.status === "running")
+      await project.updateConcept(task.id, { status: "paused" });
+    return { stopped: false };
+  }
+  try {
+    const branch = r.db.getBranch(r.branchId);
+    if (branch) await requestStop(r.store, r.db, branch);
+    return { stopped: true };
+  } finally {
+    r.db.close();
+  }
 }

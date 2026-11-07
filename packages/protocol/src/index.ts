@@ -40,6 +40,8 @@ export type ToRunner =
   | { t: "reply"; id: number; ok: false; error: string }
   | { t: "exec"; id: number; cmd: string; timeoutSec: number }
   | { t: "interrupt" }
+  /** A human's message for the running agent, delivered as a genuine user turn. */
+  | { t: "user"; text: string }
   | { t: "shutdown" };
 
 // ------------------------------------------------------- runner → orchestrator
@@ -136,6 +138,11 @@ export interface CheckpointReply {
 export interface DiffReply {
   diff: string;
   truncated: boolean;
+}
+
+/** Reply to post_tool_use and stop requests. */
+export interface HookReply {
+  ok: true;
 }
 
 export interface GraphReply {

@@ -12,6 +12,7 @@ import type {
   GraphOp,
   GraphReply,
   HistoryEntry,
+  HookReply,
   PostToolUseRequest,
   RunnerRequest,
   RunnerStartOptions,
@@ -225,6 +226,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private readonly resumeUuidByTool = new Map<string, string>();
   /** Checkpoint tool calls seen in assistant messages but not yet answered: id → summary. */
   private readonly pendingCheckpointTools = new Map<string, string>();
+  /** Instructions from humans not yet delivered (docs/phase2-spec.md §11). */
+  private pendingInstructions: { seq: number; text: string; from: string }[] = [];
+  private instructionCursor = 0;
   /** Agent cwd: the primary workspace, or the directory holding every source's. */
   private root = "";
   private companions: Companion[] = [];
@@ -696,14 +700,73 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
           workspace: this.root,
         }) satisfies Promise<GraphReply>;
       }
-      case "stop":
+      case "stop": {
+        const instruction = this.takeInstructions("stop", null);
+        if (instruction) {
+          // One more turn: the run ends at the next stop instead.
+          this.transport.send({ t: "user", text: instruction });
+          return { ok: true } satisfies HookReply;
+        }
         await this.finalize(this.interrupted ? "interrupt" : "stop");
-        return { ok: true };
+        return { ok: true } satisfies HookReply;
+      }
     }
   }
 
-  private async onPostToolUse(req: PostToolUseRequest): Promise<{ ok: true }> {
+  /** True once an interrupt was requested (a second interrupt() kills the runner). */
+  get interrupting(): boolean {
+    return this.interrupted;
+  }
+
+  /**
+   * Instructions and stop requests queued for this agent by any process since the last
+   * look (they travel through SQLite, so no IPC is needed).
+   */
+  private pullInstructions(): void {
+    const events = this.deps.db
+      .listEvents({ agentId: this.agentId, afterSeq: this.instructionCursor })
+      .filter((e) => e.type === "instruction" || e.type === "stop_request");
+    for (const e of events) {
+      this.instructionCursor = e.seq;
+      if (e.type === "stop_request") {
+        if (!this.interrupted) this.interrupt();
+        continue;
+      }
+      this.pendingInstructions.push({
+        seq: e.seq,
+        text: String(e.payload.text ?? ""),
+        from: String(e.payload.from ?? "human"),
+      });
+    }
+  }
+
+  /** Take pending instructions for delivery at `boundary`, recording when they arrived. */
+  private takeInstructions(
+    boundary: "post_tool_use" | "stop",
+    toolUseId: string | null,
+  ): string | undefined {
+    if (this.interrupted || this.finalized) return undefined;
+    this.pullInstructions();
+    if (!this.pendingInstructions.length) return undefined;
+    const batch = this.pendingInstructions;
+    this.pendingInstructions = [];
+    this.deps.db.appendEvent({
+      actorType: "system",
+      actorId: null,
+      type: "instruction_delivered",
+      branchId: this.branchId,
+      nodeId: this.head.nodeId,
+      agentId: this.agentId,
+      payload: { seqs: batch.map((b) => b.seq), via: boundary, toolUseId },
+    });
+    this.log("info", `instruction delivered (${boundary})`);
+    // The run acts for the member who sends these (D26), so they are that user's own words.
+    return batch.map((b) => b.text).join("\n\n");
+  }
+
+  private async onPostToolUse(req: PostToolUseRequest): Promise<HookReply> {
     const { db, config } = this.deps;
+    this.pullInstructions();
     const turtleTool = req.toolName.startsWith("mcp__turtle__");
     if (!turtleTool) {
       this.toolCallsSinceSemantic++;
@@ -759,6 +822,12 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       );
       if (rule) await this.autoCheckpoint(`rule:${rule}`, "progress", resumeToolUseId);
     }
+    // Human instructions go in as genuine user messages: text attached to tool results
+    // is (rightly) treated by the model as untrusted.
+    const instruction = req.agentId
+      ? undefined
+      : this.takeInstructions("post_tool_use", req.toolUseId);
+    if (instruction) this.transport.send({ t: "user", text: instruction });
     return { ok: true };
   }
 
@@ -1288,4 +1357,23 @@ function addStats(...stats: DiffStat[]): DiffStat {
     }),
     { filesChanged: 0, linesAdded: 0, linesDeleted: 0 },
   );
+}
+
+/**
+ * Queue an instruction for a running agent (any process may call this): the process
+ * running the agent delivers it at the next tool boundary, or as the agent finishes.
+ */
+export function queueInstruction(
+  db: TurtleDb,
+  o: { agentId: string; branchId: string; text: string; from: string },
+): number {
+  return db.appendEvent({
+    actorType: "human",
+    actorId: o.from,
+    type: "instruction",
+    branchId: o.branchId,
+    nodeId: null,
+    agentId: o.agentId,
+    payload: { text: o.text, from: o.from },
+  }).seq;
 }

@@ -396,11 +396,21 @@ describe("RunSession: continue and fork", () => {
 
   it("refuses to continue a running branch without --fork", async () => {
     const e = await env();
-    const first = await run(e, async (a) => a.finish());
+    const first = await run(e, async (a) => {
+      await a.finish();
+    });
     const branchId = first.session.branchId;
     e.db.updateBranch(branchId, { status: "running" });
     const head = e.db.getBranch(branchId)?.headNodeId ?? "";
-    await expect(run(e, async (a) => a.finish(), { from: head })).rejects.toThrow(/running/);
+    await expect(
+      run(
+        e,
+        async (a) => {
+          await a.finish();
+        },
+        { from: head },
+      ),
+    ).rejects.toThrow(/running/);
   });
 });
 

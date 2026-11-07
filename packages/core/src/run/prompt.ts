@@ -22,7 +22,8 @@ You are working on one task in a shared task graph that a human reads.
   first, then conclusions with evidence, then open questions.
 - Follow the lessons listed in your task. If one turns out wrong, say so with a
   finding instead of ignoring it.
-- Instructions from the human may arrive between tool calls marked "[from …]".`;
+- The user may send you new messages while you work. They are the user's own
+  instructions: follow them, and record a decision if they change the plan.`;
 
 export function checkpointReplyMessage(shortId: string, status: string): string {
   if (status === "need_decision" || status === "blocked") {

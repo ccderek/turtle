@@ -192,7 +192,7 @@ export async function requestStop(
           detail: `could not signal pid ${pid}: ${(err as Error).message}`,
         });
       }
-    } else if (existsSync(uiOwnerFileFor(store, a.id))) {
+    } else if (existsSync(uiOwnerFileFor(store, a.id)) || (a.pid !== null && isAlive(a.pid))) {
       db.appendEvent({
         actorType: "human",
         actorId: null,
@@ -202,7 +202,11 @@ export async function requestStop(
         agentId: a.id,
         payload: {},
       });
-      out.push({ agentId: a.id, via: "request", detail: "stop requested from turtle ui" });
+      out.push({
+        agentId: a.id,
+        via: "request",
+        detail: "stop requested; the agent stops at its next tool boundary",
+      });
     } else {
       out.push({
         agentId: a.id,
@@ -212,4 +216,13 @@ export async function requestStop(
     }
   }
   return out;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }

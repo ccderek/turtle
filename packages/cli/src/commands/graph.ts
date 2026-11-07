@@ -13,7 +13,9 @@ import {
   type SandboxMode,
   shortConceptIds,
   startTaskRun,
+  stopTask,
   TurtleDb,
+  tellTask,
 } from "@turtle/core";
 import { CliError } from "../context.js";
 import { c, firstLine, truncate } from "../render.js";
@@ -174,7 +176,8 @@ export async function taskShowCommand(cwd: string, ref: string): Promise<string[
 export async function taskDropCommand(cwd: string, ref: string): Promise<string[]> {
   return withProject(cwd, async (p) => {
     const n = p.resolveConcept(ref);
-    await p.dropConcept(n.id);
+    if (n.kind === "task" && n.status === "running") await stopTask(p, n.id, { drop: true });
+    else await p.dropConcept(n.id);
     return [
       `dropped ${n.title}  ${c.dim("(undo: turtle undo with its operation id, see turtle task show)")}`,
     ];
@@ -354,5 +357,25 @@ export async function lessonCommand(
       ...(o.text ? { body: o.text, title: firstLine(o.text) } : {}),
     });
     return [`lesson ${short(l.id)} ${action === "confirm" ? "confirmed" : "superseded"}`];
+  });
+}
+
+export async function tellCommand(cwd: string, ref: string, text: string): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const t = p.resolveConcept(ref);
+    const { agentId } = await tellTask(p, t.id, text);
+    return [`queued for agent ${agentId.slice(0, 6)}: it gets this at its next tool call`];
+  });
+}
+
+export async function taskPauseCommand(cwd: string, ref: string): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const t = p.resolveConcept(ref);
+    const { stopped } = await stopTask(p, t.id);
+    return [
+      stopped
+        ? "pausing at the next tool boundary (resume: turtle task start)"
+        : "the task was not running",
+    ];
   });
 }

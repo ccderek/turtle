@@ -304,7 +304,7 @@ Notifications (D21): inform, never ask.
 
 | Human action | Delivery to the running agent |
 |---|---|
-| **Tell the agent…** (free text) | Queued as an instruction. At the next PostToolUse boundary, the hook's reply carries it as `hookSpecificOutput.additionalContext` ("[from derek] …"). If the agent ends its turn first, the **Stop** hook carries it in `additionalContext` and the conversation continues. **VERIFY** both deliveries with the real SDK; the types exist in 0.3.316 |
+| **Tell the agent…** (free text) | Queued as an `instruction` event in the source's SQLite (any process can queue one). The run picks it up at its next tool boundary and sends it into the SDK's streaming input as a **genuine user message**, the user's own words without a wrapper. Claude Code absorbs it mid-turn ("the user sent a new message while you were working"). If it arrives as the agent ends its turn, it starts one more turn. **Verified live (M5):** text returned through PostToolUse `additionalContext` is attached to a tool result, and the model rightly ignores it as possible prompt injection. A relayed "X says: …" wrapper was rejected too. The verbatim user message was followed |
 | Edit the task's title/body/dependencies | An instruction is generated: "derek changed this task: <diff>" |
 | Pause | Interrupt (Phase 0); status `paused`; resume = continue the branch with "resumed by derek" |
 | Drop | Interrupt; status `dropped`; work is kept as a `killed` checkpoint |
@@ -312,7 +312,7 @@ Notifications (D21): inform, never ask.
 
 Every delivery is an event (`instruction_queued`, `instruction_delivered` with the tool-use id), which gives G3.
 
-**Fallback.** If the hook path fails, the instruction is delivered by interrupt + continue with the instruction as the prompt. This is slower and loses the in-flight tool call.
+**Stop requests travel the same way.** A `stop_request` event is seen by the run at its next tool boundary, so `turtle task pause` works for runs in any process. Runs with a pid file are also signalled at once.
 
 ### 11.1 Abandon and retry (D28)
 
