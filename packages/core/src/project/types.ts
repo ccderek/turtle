@@ -1,6 +1,13 @@
 /** Task graph types (docs/phase2-spec.md §5–§6, architecture §3.5). */
 
-export type ConceptKind = "goal" | "task" | "finding" | "decision" | "question" | "output";
+export type ConceptKind =
+  | "goal"
+  | "task"
+  | "finding"
+  | "decision"
+  | "question"
+  | "output"
+  | "lesson";
 
 export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "goal",
@@ -9,6 +16,7 @@ export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "decision",
   "question",
   "output",
+  "lesson",
 ];
 
 export type TaskStatus =
@@ -19,6 +27,7 @@ export type TaskStatus =
   | "blocked"
   | "done"
   | "failed"
+  | "abandoned"
   | "dropped";
 
 export type Actor =
@@ -53,6 +62,8 @@ export interface ConceptFields {
   path?: string;
   sha256?: string;
   size?: number;
+  // lesson: applies to the subtree of parentId (architecture D28/D30)
+  lessonState?: "proposed" | "confirmed" | "superseded";
   // ordering among siblings
   order?: string;
 }

@@ -5,9 +5,14 @@ import {
   answerCommand,
   goalCommand,
   graphCommand,
+  lessonCommand,
+  type TaskStartOptions,
+  taskAbandonCommand,
   taskAddCommand,
   taskDropCommand,
+  taskRetryCommand,
   taskShowCommand,
+  taskStartCommand,
   undoCommand,
 } from "./commands/graph.js";
 import { logCommand, showCommand, statsCommand, statusCommand } from "./commands/inspect.js";
@@ -135,6 +140,53 @@ task
   .description("drop a task or concept (undoable)")
   .argument("<concept>")
   .action(async (ref: string) => print(await taskDropCommand(cwd(), ref)));
+
+task
+  .command("start")
+  .description("run the task's agent (continues its branch, or forks from its start point)")
+  .argument("<task>")
+  .option("-m, --message <text>", "an instruction for the agent")
+  .option("--sandbox <mode>", "docker | none")
+  .option("--model <model>", "model for the agent")
+  .option("--budget <usd>", "maximum spend for this run in USD")
+  .option("-v, --verbose", "also show micro snapshots and the agent's messages")
+  .action(async (ref: string, o: TaskStartOptions) => {
+    process.exitCode = await taskStartCommand(cwd(), ref, o);
+  });
+task
+  .command("abandon")
+  .description("give up an approach: keep its record, turn what it taught into a lesson")
+  .argument("<task>")
+  .option("-l, --lesson <text>", "the lesson (default: drafted from its findings)")
+  .option("--on <node>", "node the lesson applies to (default: the task's parent)")
+  .action(async (ref: string, o: { lesson?: string; on?: string }) =>
+    print(await taskAbandonCommand(cwd(), ref, o)),
+  );
+task
+  .command("retry")
+  .description("try another way under <node>, from a checkpoint before the abandoned attempts")
+  .argument("<node>")
+  .argument("<title>")
+  .option(
+    "--from <checkpoint>",
+    "checkpoint to start from (default: before the first abandoned attempt)",
+  )
+  .option("-b, --body <text>", "details")
+  .action(async (ref: string, title: string, o: { from?: string; body?: string }) =>
+    print(await taskRetryCommand(cwd(), ref, title, o)),
+  );
+
+program
+  .command("lesson")
+  .description("lessons: add | confirm | supersede")
+  .argument("<action>", "add | confirm | supersede")
+  .argument("<concept>", "the node to add to, or the lesson")
+  .option("-t, --text <text>", "lesson text (add, or replace when confirming)")
+  .action(async (action: string, ref: string, o: { text?: string }) => {
+    if (action !== "add" && action !== "confirm" && action !== "supersede")
+      throw new Error(`unknown action: ${action}`);
+    print(await lessonCommand(cwd(), action, ref, o));
+  });
 
 program
   .command("answer")

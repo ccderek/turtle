@@ -9,6 +9,21 @@ export const TURTLE_SYSTEM_PROMPT = `You are working inside turtle, which record
 - Use status "need_decision" or "blocked" only when you cannot continue without the
   human. After such a checkpoint, end your turn with one short question.`;
 
+/** Added when the run belongs to a task in the graph (docs/phase2-spec.md §8). */
+export const TURTLE_GRAPH_PROMPT = `
+You are working on one task in a shared task graph that a human reads.
+- Record what you learn with mcp__turtle__finding and attach evidence (a file you
+  wrote, such as saved command output, or a checkpoint).
+- Record choices with mcp__turtle__decision. Ask with mcp__turtle__question only
+  when a human must decide, then end your turn.
+- Split work with mcp__turtle__task only when parts can run independently or need
+  a different starting point.
+- Keep your brief current with mcp__turtle__brief at each checkpoint: status
+  first, then conclusions with evidence, then open questions.
+- Follow the lessons listed in your task. If one turns out wrong, say so with a
+  finding instead of ignoring it.
+- Instructions from the human may arrive between tool calls marked "[from …]".`;
+
 export function checkpointReplyMessage(shortId: string, status: string): string {
   if (status === "need_decision" || status === "blocked") {
     return `Checkpoint ${shortId} recorded. End your turn now with one short question for the human; they will answer later.`;

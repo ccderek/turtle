@@ -1,15 +1,24 @@
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   type Concept,
+  GitStore,
   type GraphTreeNode,
   graphTree,
   importAllSources,
+  loadConfig,
   OpsError,
   type Project,
+  pidFileFor,
+  type SandboxMode,
   shortConceptIds,
+  startTaskRun,
+  TurtleDb,
 } from "@turtle/core";
 import { CliError } from "../context.js";
 import { c, firstLine, truncate } from "../render.js";
 import { requireProject } from "./project.js";
+import { credentialHint, launcherFor, runEventPrinter, summarizerFor } from "./run.js";
 
 async function withProject<T>(cwd: string, fn: (p: Project) => Promise<T>): Promise<T> {
   const p = await requireProject(cwd);
@@ -32,6 +41,7 @@ const STATUS_MARK: Record<string, (s: string) => string> = {
   done: c.green,
   paused: (s) => c.dim(s),
   failed: c.red,
+  abandoned: (s) => c.dim(s),
   dropped: (s) => c.dim(s),
 };
 const STATUS_ICON: Record<string, string> = {
@@ -42,9 +52,11 @@ const STATUS_ICON: Record<string, string> = {
   done: "✓",
   paused: "‖",
   failed: "✗",
+  abandoned: "~",
   dropped: "⌀",
 };
 const KIND_LABEL: Record<string, string> = {
+  lesson: "lesson",
   finding: "finding",
   decision: "decision",
   question: "question",
@@ -184,5 +196,163 @@ export async function undoCommand(cwd: string, opRef: string): Promise<string[]>
     return [
       `undid ${op.change.kind} (${inverse.length} inverse operation${inverse.length === 1 ? "" : "s"})`,
     ];
+  });
+}
+
+// ------------------------------------------------------------- task runs
+
+export interface TaskStartOptions {
+  message?: string;
+  sandbox?: SandboxMode;
+  model?: string;
+  budget?: string;
+  verbose?: boolean;
+}
+
+/** `turtle task start`: run (or continue) the task's agent in this terminal. */
+export async function taskStartCommand(
+  cwd: string,
+  ref: string,
+  o: TaskStartOptions,
+): Promise<number> {
+  const p = await requireProject(cwd);
+  const opened: { close(): void }[] = [p];
+  try {
+    await importAllSources(p);
+    const task = p.resolveConcept(ref);
+    const primary = p.config.sources.find((s) => s.id === task.sources?.[0]) ?? p.config.sources[0];
+    if (!primary)
+      throw new CliError("the project has no sources: turtle project add-source <repo>");
+    const config = await loadConfig(primary.path);
+    if (p.config.defaults.sandbox) config.sandbox.mode = p.config.defaults.sandbox;
+    if (p.config.defaults.model) config.agent.model = p.config.defaults.model;
+    const sandbox = o.sandbox ?? config.sandbox.mode;
+    const store = await GitStore.open(primary.path);
+    const printDb = TurtleDb.open(join(store.turtleDir, "turtle.db"));
+    opened.push(printDb);
+    const hint = credentialHint(sandbox);
+    if (hint) process.stdout.write(`${c.yellow(hint)}\n`);
+    const budget = o.budget ? Number(o.budget) : undefined;
+    if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0))
+      throw new CliError(`invalid --budget: ${o.budget}`);
+    const run = await startTaskRun(
+      p,
+      task.id,
+      {
+        config,
+        launcherFor,
+        summarizer: summarizerFor(config, (m) => process.stdout.write(`${c.yellow(m)}\n`)),
+        onEvent: runEventPrinter(printDb, sandbox, o.verbose ?? false),
+      },
+      {
+        sandbox,
+        ...(o.message ? { instruction: o.message } : {}),
+        ...(o.model ? { model: o.model } : {}),
+        ...(budget ? { maxBudgetUsd: budget } : {}),
+      },
+    );
+    opened.push(run);
+    const pidFile = pidFileFor(store, run.session.agentId);
+    await mkdir(join(store.turtleDir, "run"), { recursive: true });
+    await writeFile(pidFile, String(process.pid));
+    const onSignal = () => run.session.interrupt();
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    try {
+      const outcome = await run.session.done;
+      const after = p.getConcept(task.id);
+      process.stdout.write(
+        `task ${c.bold(shortConceptIds(p)(task.id))} ${task.title}: ${after?.status ?? "?"}\n`,
+      );
+      return outcome.reason === "failed" ? 1 : outcome.reason === "killed" ? 130 : 0;
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      await rm(pidFile, { force: true });
+    }
+  } catch (err) {
+    if (err instanceof OpsError) throw new CliError(err.message);
+    throw err;
+  } finally {
+    for (const x of opened.reverse()) x.close();
+  }
+}
+
+export async function taskAbandonCommand(
+  cwd: string,
+  ref: string,
+  o: { lesson?: string; on?: string },
+): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const t = p.resolveConcept(ref);
+    if (t.status === "running")
+      throw new CliError("the task is running; stop it first (turtle stop <branch>)");
+    const { lesson } = await p.abandonTask(t.id, {
+      ...(o.lesson ? { lesson: o.lesson } : {}),
+      ...(o.on ? { on: p.resolveConcept(o.on).id } : {}),
+    });
+    const short = shortConceptIds(p);
+    const on = lesson.parentId ? p.getConcept(lesson.parentId) : null;
+    return [
+      `abandoned ${t.title} (kept in the record)`,
+      `lesson ${c.bold(short(lesson.id))} on "${on?.title ?? "?"}" ${c.dim(`[${lesson.lessonState}]`)}`,
+      ...(lesson.body ?? "").split("\n").map((l) => c.dim(`  ${l}`)),
+      lesson.lessonState === "proposed"
+        ? c.dim(`edit or confirm: turtle lesson confirm ${short(lesson.id)} [--text "<lesson>"]`)
+        : "",
+      c.dim(`retry: turtle task retry ${short(on?.id ?? "")} "<another way>"`),
+    ].filter(Boolean);
+  });
+}
+
+export async function taskRetryCommand(
+  cwd: string,
+  ref: string,
+  title: string,
+  o: { from?: string; body?: string },
+): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const parent = p.resolveConcept(ref);
+    const t = await p.retryTask(parent.id, title, {
+      ...(o.body ? { body: o.body } : {}),
+      ...(o.from ? { from: { taskId: parent.id, checkpointId: o.from } } : {}),
+    });
+    const short = shortConceptIds(p);
+    const lessons = p.lessonsInScope(t.id).length;
+    return [
+      `task ${c.bold(short(t.id))} ${t.title}  ${c.dim(t.startFrom ? `starts from ${t.startFrom.checkpointId.slice(0, 6)}` : "starts fresh")}`,
+      c.dim(
+        `inherits ${lessons} lesson${lessons === 1 ? "" : "s"}; start it: turtle task start ${short(t.id)}`,
+      ),
+    ];
+  });
+}
+
+export async function lessonCommand(
+  cwd: string,
+  action: "add" | "confirm" | "supersede",
+  ref: string,
+  o: { text?: string },
+): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const short = shortConceptIds(p);
+    if (action === "add") {
+      if (!o.text) throw new CliError("--text is required");
+      const l = await p.createConcept({
+        kind: "lesson",
+        parentId: p.resolveConcept(ref).id,
+        title: firstLine(o.text),
+        body: o.text,
+        lessonState: "confirmed",
+      });
+      return [`lesson ${c.bold(short(l.id))} added`];
+    }
+    const l = p.resolveConcept(ref);
+    if (l.kind !== "lesson") throw new CliError(`${ref} is not a lesson`);
+    await p.updateConcept(l.id, {
+      lessonState: action === "confirm" ? "confirmed" : "superseded",
+      ...(o.text ? { body: o.text, title: firstLine(o.text) } : {}),
+    });
+    return [`lesson ${short(l.id)} ${action === "confirm" ? "confirmed" : "superseded"}`];
   });
 }

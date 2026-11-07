@@ -17,6 +17,7 @@ import {
   type SandboxMode,
   type Summarizer,
   type TurtleConfig,
+  type TurtleDb,
 } from "@turtle/core";
 import { CliError, type Context, resolveNode, shortIds } from "../context.js";
 import { c, firstLine, money, nodeLine, truncate } from "../render.js";
@@ -95,9 +96,63 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
     opts.maxBudgetUsd = budget;
   }
 
+  const print = (line: string) => process.stdout.write(`${line}\n`);
+  const onEvent = runEventPrinter(db, sandbox, o.verbose ?? false);
+
+  const hint = credentialHint(sandbox);
+  if (hint) print(c.yellow(hint));
+
+  // In a project with several sources, the run works in all of them (phase2-spec §7.1).
+  const project = await Project.find(ctx.cwd);
+  const sources = await openRunSources(project, store.topLevel ?? ctx.cwd);
+  if (sources.companions.length && sources.primaryId) {
+    opts.companions = sources.companions;
+    opts.primarySourceId = sources.primaryId;
+    print(
+      c.dim(`  sources: ${[sources.primaryId, ...sources.companions.map((s) => s.id)].join(", ")}`),
+    );
+  }
+
+  const session = await RunSession.start(
+    {
+      store,
+      db,
+      config,
+      launcher: launcherFor(sandbox, config),
+      summarizer: summarizerFor(config, (m) => print(c.yellow(`  ${m}`))),
+      onEvent,
+    },
+    opts,
+  );
+
+  const pidFile = pidFileFor(store, session.agentId);
+  await mkdir(join(store.turtleDir, "run"), { recursive: true });
+  await writeFile(pidFile, String(process.pid));
+  const onSignal = () => session.interrupt();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    const outcome = await session.done;
+    return outcome.reason === "failed" ? 1 : outcome.reason === "killed" ? 130 : 0;
+  } finally {
+    sources.close();
+    project?.close();
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await rm(pidFile, { force: true });
+  }
+}
+
+/** Terminal output for a run's events (shared by `turtle run` and `turtle task start`). */
+export function runEventPrinter(
+  db: TurtleDb,
+  sandbox: SandboxMode,
+  verbose: boolean,
+): (e: RunEvent) => void {
   let short = shortIds(db);
   const print = (line: string) => process.stdout.write(`${line}\n`);
-  const onEvent = (e: RunEvent) => {
+  const o = { verbose };
+  return (e: RunEvent) => {
     switch (e.type) {
       case "started": {
         short = shortIds(db);
@@ -158,47 +213,4 @@ export async function runCommand(ctx: Context, prompt: string, o: RunCliOptions)
       }
     }
   };
-
-  const hint = credentialHint(sandbox);
-  if (hint) print(c.yellow(hint));
-
-  // In a project with several sources, the run works in all of them (phase2-spec §7.1).
-  const project = await Project.find(ctx.cwd);
-  const sources = await openRunSources(project, store.topLevel ?? ctx.cwd);
-  if (sources.companions.length && sources.primaryId) {
-    opts.companions = sources.companions;
-    opts.primarySourceId = sources.primaryId;
-    print(
-      c.dim(`  sources: ${[sources.primaryId, ...sources.companions.map((s) => s.id)].join(", ")}`),
-    );
-  }
-
-  const session = await RunSession.start(
-    {
-      store,
-      db,
-      config,
-      launcher: launcherFor(sandbox, config),
-      summarizer: summarizerFor(config, (m) => print(c.yellow(`  ${m}`))),
-      onEvent,
-    },
-    opts,
-  );
-
-  const pidFile = pidFileFor(store, session.agentId);
-  await mkdir(join(store.turtleDir, "run"), { recursive: true });
-  await writeFile(pidFile, String(process.pid));
-  const onSignal = () => session.interrupt();
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  try {
-    const outcome = await session.done;
-    return outcome.reason === "failed" ? 1 : outcome.reason === "killed" ? 130 : 0;
-  } finally {
-    sources.close();
-    project?.close();
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await rm(pidFile, { force: true });
-  }
 }

@@ -16,6 +16,8 @@ import type {
   CheckpointReply,
   DiffReply,
   FromRunner,
+  GraphOp,
+  GraphReply,
   HistoryEntry,
   RunnerRequest,
   RunnerStartOptions,
@@ -52,6 +54,7 @@ export interface RunnerDeps {
  * MCP tools (checkpoint, diff, history).
  */
 export class ClaudeRunner {
+  private graphTools = false;
   private reqSeq = 0;
   private readonly pending = new Map<
     number,
@@ -183,6 +186,7 @@ export class ClaudeRunner {
 
   /** Build SDK options (exported shape is checked in tests). */
   options(o: RunnerStartOptions): Options {
+    this.graphTools = o.graphTools ?? false;
     const options: Options = {
       cwd: this.deps.cwd,
       systemPrompt: { type: "preset", preset: "claude_code", append: o.systemPromptAppend },
@@ -240,6 +244,88 @@ export class ClaudeRunner {
     }
     return {};
   };
+
+  /** Task-graph tools (docs/phase2-spec.md §8); each forwards one `graph` request. */
+  private graphToolDefs(
+    tool: typeof SdkTool,
+    text: (t: string) => { content: { type: "text"; text: string }[] },
+  ) {
+    const call = async (op: GraphOp, args: Record<string, unknown>) => {
+      const reply = await this.request<GraphReply>({ kind: "graph", op, args });
+      return text(reply.message);
+    };
+    const evidence = z
+      .array(
+        z.object({
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "A file you wrote (e.g. results/run1.csv), relative to the working directory.",
+            ),
+          checkpoint: z.string().optional().describe("A checkpoint id."),
+        }),
+      )
+      .optional();
+    return [
+      tool(
+        "task",
+        "Create a subtask under your task (op create), or update one of your tasks (op update). Split work only when parts can run independently or need a different starting point.",
+        {
+          op: z.enum(["create", "update"]),
+          id: z.string().optional().describe("Task id (update)."),
+          title: z.string().optional(),
+          body: z.string().optional().describe("What the task must do and how to know it is done."),
+          dependsOn: z
+            .array(z.string())
+            .optional()
+            .describe("Ids of tasks that must be done first."),
+          startFrom: z
+            .string()
+            .optional()
+            .describe('"here" to start from your latest checkpoint, or a checkpoint id.'),
+          status: z.enum(["done", "blocked"]).optional().describe("Update only."),
+        },
+        async (args) => call("task", args),
+      ),
+      tool(
+        "finding",
+        "Record something you learned (a measurement, a cause, a fact). Attach evidence: a file with the data, or a checkpoint.",
+        { text: z.string(), evidence },
+        async (args) => call("finding", args),
+      ),
+      tool(
+        "decision",
+        "Record a choice you made and why, so the human sees pivots.",
+        { text: z.string(), rationale: z.string().optional() },
+        async (args) => call("decision", args),
+      ),
+      tool(
+        "question",
+        "Ask the human something only they can decide. Your task waits for the answer; end your turn after asking.",
+        { text: z.string(), options: z.array(z.string()).optional() },
+        async (args) => call("question", args),
+      ),
+      tool(
+        "brief",
+        "Replace your task's brief: status first, then conclusions with their evidence, then open questions. Keep it current at each checkpoint.",
+        { text: z.string() },
+        async (args) => call("brief", args),
+      ),
+      tool(
+        "lesson",
+        "Propose a lesson for work that comes after yours (what not to repeat, and why). A human confirms it.",
+        { text: z.string(), evidence },
+        async (args) => call("lesson", args),
+      ),
+      tool(
+        "graph",
+        "Show the task graph around your task: your task, siblings, what you depend on, decisions and the lessons you must follow.",
+        { scope: z.enum(["task", "goal"]).optional() },
+        async (args) => call("read", args),
+      ),
+    ];
+  }
 
   private mcpServer() {
     const { tool, createSdkMcpServer } = this.deps.sdk;
@@ -305,6 +391,7 @@ export class ClaudeRunner {
             return text(reply.diff || "(no changes)");
           },
         ),
+        ...(this.graphTools ? this.graphToolDefs(tool, text) : []),
         tool(
           "history",
           "List earlier checkpoints on this branch, newest first. Use this instead of git log.",

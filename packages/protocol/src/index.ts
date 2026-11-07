@@ -23,6 +23,8 @@ export interface RunnerStartOptions {
   allowedTools?: string[];
   /** Command run in the sandbox before the agent starts (e.g. `npm ci`). */
   setupCommand?: string;
+  /** Expose the task-graph tools (the run belongs to a task). */
+  graphTools?: boolean;
 }
 
 export interface ArtifactRef {
@@ -83,6 +85,17 @@ export interface HistoryRequest {
   limit?: number;
 }
 
+/** Task-graph tools (docs/phase2-spec.md §8): one request kind, the tool name in `op`. */
+export type GraphOp = "task" | "finding" | "decision" | "question" | "brief" | "lesson" | "read";
+
+export interface GraphRequest {
+  t: "request";
+  id: number;
+  kind: "graph";
+  op: GraphOp;
+  args: Record<string, unknown>;
+}
+
 export interface StopRequest {
   t: "request";
   id: number;
@@ -95,6 +108,7 @@ export type RunnerRequest =
   | CheckpointRequest
   | DiffRequest
   | HistoryRequest
+  | GraphRequest
   | StopRequest;
 
 export type FromRunner =
@@ -122,6 +136,13 @@ export interface CheckpointReply {
 export interface DiffReply {
   diff: string;
   truncated: boolean;
+}
+
+export interface GraphReply {
+  /** Text returned to the model as the tool result. */
+  message: string;
+  /** Id of the concept created or changed, when there is one. */
+  id?: string;
 }
 
 export interface HistoryEntry {

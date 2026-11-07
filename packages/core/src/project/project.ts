@@ -99,6 +99,7 @@ const SET_FIELDS: readonly ConceptField[] = [
   "path",
   "sha256",
   "size",
+  "lessonState",
   "order",
 ];
 
@@ -320,6 +321,105 @@ export class Project {
   }
 
   /**
+   * Abandon an approach without deleting it (docs/phase2-spec.md §11.1): the task and
+   * its unfinished subtasks become `abandoned`, and a lesson is attached to `on`
+   * (default: the task's parent). A lesson text written by a member is `confirmed`;
+   * a drafted one stays `proposed` until a human confirms it.
+   */
+  async abandonTask(
+    taskId: string,
+    o: { lesson?: string; on?: string; actor?: Actor } = {},
+  ): Promise<{ task: Concept; lesson: Concept }> {
+    const actor = o.actor ?? this.me;
+    const task = this.requireConcept(taskId);
+    if (task.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+    const on = o.on ?? task.parentId;
+    if (!on) throw new OpsError("nowhere to attach the lesson");
+    this.requireConcept(on);
+    const open = (t: Concept) =>
+      t.status !== "done" && t.status !== "failed" && t.status !== "dropped";
+    const subtree: Concept[] = [];
+    const walk = (id: string) => {
+      for (const c of this.db.listConcepts({ parentId: id })) {
+        if (c.kind === "task") subtree.push(c);
+        walk(c.id);
+      }
+    };
+    walk(task.id);
+    await this.updateConcept(task.id, { status: "abandoned" }, { actor });
+    for (const t of subtree.filter(open))
+      await this.updateConcept(t.id, { status: "abandoned" }, { actor });
+    const drafted = !o.lesson;
+    const lesson = await this.createConcept(
+      {
+        kind: "lesson",
+        parentId: on,
+        title: firstLineOf(o.lesson ?? draftLesson(this, task)),
+        body: o.lesson ?? draftLesson(this, task),
+        lessonState: drafted || actor.type === "agent" ? "proposed" : "confirmed",
+      },
+      actor,
+    );
+    await this.link(lesson.id, "provenance", { type: "concept", id: task.id }, actor);
+    return { task: this.requireConcept(task.id), lesson };
+  }
+
+  /**
+   * Try another way under `parentId`: a new sibling task that starts from a checkpoint
+   * taken before the abandoned attempts began (default: the parent's newest evidence
+   * checkpoint older than its first abandoned child). It receives the lessons in scope
+   * through the context assembler.
+   */
+  async retryTask(
+    parentId: string,
+    title: string,
+    o: {
+      body?: string;
+      from?: { taskId: string; checkpointId: string } | null;
+      actor?: Actor;
+    } = {},
+  ): Promise<Concept> {
+    const parent = this.requireConcept(parentId);
+    let from = o.from;
+    if (from === undefined) {
+      const abandoned = this.db
+        .listConcepts({ parentId })
+        .filter((c) => c.kind === "task" && c.status === "abandoned")
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const before = abandoned[0]?.createdAt;
+      const cps = this.db
+        .listLinks({ from: parentId, rel: "evidence" })
+        .filter((l) => l.to.type === "node" && (!before || l.createdAt <= before));
+      const cp = cps.at(-1);
+      from = cp && parent.kind === "task" ? { taskId: parent.id, checkpointId: cp.to.id } : null;
+    }
+    return this.createConcept(
+      {
+        kind: "task",
+        parentId,
+        title,
+        ...(o.body ? { body: o.body } : {}),
+        assignee: { type: "agent" },
+        ...(from ? { startFrom: from } : {}),
+      },
+      o.actor ?? this.me,
+    );
+  }
+
+  /** Lessons that apply to a concept: those on it and on every ancestor, nearest first. */
+  lessonsInScope(id: string): Concept[] {
+    const out: Concept[] = [];
+    let cur = this.db.getConcept(id);
+    while (cur) {
+      for (const c of this.db.listConcepts({ parentId: cur.id, kind: "lesson" })) {
+        if (c.lessonState !== "superseded") out.push(c);
+      }
+      cur = cur.parentId ? this.db.getConcept(cur.parentId) : null;
+    }
+    return out;
+  }
+
+  /**
    * Undo the batch containing `opId` with an inverse batch: creates are dropped, sets
    * restore the replaced values, drops are restored, links are removed.
    */
@@ -449,3 +549,23 @@ async function writePointer(sourcePath: string, projectDir: string): Promise<voi
 }
 
 export type { ConceptKind };
+
+function firstLineOf(s: string): string {
+  const line = (s.split("\n")[0] ?? "").trim();
+  return line.length > 100 ? `${line.slice(0, 99)}…` : line || "Lesson";
+}
+
+/** A plain draft of what an abandoned task teaches (no model call). */
+function draftLesson(p: Project, task: Concept): string {
+  const findings = p.db
+    .listConcepts({ parentId: task.id, kind: "finding" })
+    .map((f) => `- ${f.title}`);
+  const decisions = p.db
+    .listConcepts({ parentId: task.id, kind: "decision" })
+    .map((d) => `- decided: ${d.title}`);
+  const lines = [`"${task.title}" was abandoned; do not repeat it as it was.`];
+  if (findings.length || decisions.length)
+    lines.push("", "What it found:", ...findings, ...decisions);
+  if (task.brief) lines.push("", "Its last brief:", task.brief);
+  return lines.join("\n");
+}

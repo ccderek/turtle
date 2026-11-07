@@ -261,9 +261,20 @@ System prompt additions (draft):
 
 > You are working on one task in a shared task graph that a human watches. Record what you learn with turtle_finding (attach evidence: a file you wrote, a command's output saved to a file, a checkpoint). Ask with turtle_question only when a human must decide. Split work with turtle_task only when parts can run independently or need a different start. Keep the brief current with turtle_brief at each checkpoint: status first, then conclusions with evidence, then open questions. Instructions from the human may arrive between tool calls marked "[from derek]": follow them.
 
+As built (M4):
+- **Protocol.** The tools are one protocol request, `kind: "graph"` with an `op`. They are only exposed when the run belongs to a task (`RunnerStartOptions.graphTools`), so plain runs pay no token cost for them.
+- **Binding.** `RunSession` knows nothing about projects. It forwards graph requests and its lifecycle (start, semantic checkpoint, end) to a `TaskBinding`; `TaskRunBinding` in `core/project/task-run.ts` implements it.
+- **Evidence.** A file path becomes an `output` concept (path, sha256, size) linked as evidence. A finding without evidence is linked to the current node as provenance and is shown as claimed.
+- **Brief reminder.** A checkpoint's reply reminds the agent to update the brief when it has not done so in this run.
+- **Starting a task** (`startTaskRun`, `turtle task start`):
+  - continue the task's idle branch, whose prompt is the instruction (or the answers given since the last checkpoint) plus the lessons in force;
+  - fork from `startFrom`;
+  - or start new.
+- **The task follows the run.** At the end, the task's status follows the run's outcome; an unanswered question makes it `need_decision`.
+
 Guards:
 - **Caps on what an agent may create.**
-  - At most 8 tasks per agent turn.
+  - At most 8 tasks per run (built per run, not per turn).
   - At most depth 3 below the agent's own task.
   - At most 20 findings per checkpoint.
   - Excess calls return an error explaining the cap.

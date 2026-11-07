@@ -401,6 +401,49 @@ describe("ClaudeRunner with a mocked SDK", () => {
     });
     expect(Object.keys(opts.hooks ?? {})).toEqual(["PostToolUse", "PostToolUseFailure", "Stop"]);
   });
+
+  it("exposes the task-graph tools only for task runs and forwards them as graph requests", async () => {
+    const { sdk } = mockSdk(async () => {});
+    const sent: FromRunner[] = [];
+    const runner = new ClaudeRunner({ cwd: "/w", sdk, send: (m) => sent.push(m), exit: () => {} });
+    const names = (o: Options) =>
+      ((o.mcpServers?.turtle ?? { tools: [] }) as unknown as { tools: ToolDef[] }).tools.map(
+        (t) => t.name,
+      );
+    expect(
+      names(runner.options({ systemPromptAppend: "x", permissionMode: "acceptEdits" })),
+    ).toEqual(["checkpoint", "diff", "history"]);
+    const opts = runner.options({
+      systemPromptAppend: "x",
+      permissionMode: "acceptEdits",
+      graphTools: true,
+    });
+    expect(names(opts)).toEqual([
+      "checkpoint",
+      "diff",
+      "task",
+      "finding",
+      "decision",
+      "question",
+      "brief",
+      "lesson",
+      "graph",
+      "history",
+    ]);
+    const graph = (
+      (opts.mcpServers?.turtle ?? { tools: [] }) as unknown as { tools: ToolDef[] }
+    ).tools.find((t) => t.name === "graph");
+    const pending = graph?.handler({ scope: "goal" }, {});
+    const req = sent.find((m) => m.t === "request");
+    expect(req).toMatchObject({ kind: "graph", op: "read", args: { scope: "goal" } });
+    runner.handle({
+      t: "reply",
+      id: (req as { id: number }).id,
+      ok: true,
+      result: { message: "Goal: G" },
+    });
+    expect((await pending)?.content[0]?.text).toBe("Goal: G");
+  });
 });
 
 describe("ensureSessionInProject", () => {

@@ -7,6 +7,8 @@ import type {
   CheckpointStatus,
   DiffReply,
   FromRunner,
+  GraphOp,
+  GraphReply,
   HistoryEntry,
   RunnerRequest,
   RunnerStartOptions,
@@ -197,6 +199,32 @@ export class FakeAgent {
       toolName: "mcp__turtle__checkpoint",
       toolUseId,
       toolInput: input,
+      toolResponse: reply.message,
+    });
+    this.sdk({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: toolUseId, content: reply.message }],
+      },
+    });
+    return reply;
+  }
+
+  /** Call a task-graph tool (mcp__turtle__<op>) the way the model would. */
+  async graph(op: GraphOp, args: Record<string, unknown> = {}): Promise<GraphReply> {
+    this.check();
+    const name = op === "read" ? "graph" : op;
+    const toolUseId = `toolu_${randomUUID().slice(0, 8)}`;
+    this.assistant([
+      { type: "tool_use", id: toolUseId, name: `mcp__turtle__${name}`, input: args },
+    ]);
+    const reply = await this.request<GraphReply>({ kind: "graph", op, args });
+    await this.request({
+      kind: "post_tool_use",
+      toolName: `mcp__turtle__${name}`,
+      toolUseId,
+      toolInput: args,
       toolResponse: reply.message,
     });
     this.sdk({

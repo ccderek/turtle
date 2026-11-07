@@ -9,6 +9,8 @@ import type {
   CheckpointStatus,
   DiffReply,
   FromRunner,
+  GraphOp,
+  GraphReply,
   HistoryEntry,
   PostToolUseRequest,
   RunnerRequest,
@@ -40,6 +42,7 @@ import {
 import {
   checkpointReplyMessage,
   contextPrefix,
+  TURTLE_GRAPH_PROMPT,
   TURTLE_SYSTEM_PROMPT,
   workspaceMovedNote,
 } from "./prompt.js";
@@ -86,6 +89,31 @@ export interface RunDeps {
   now?: () => number;
   /** Subscribed before anything is emitted, so it also sees "started". */
   onEvent?: (event: RunEvent) => void;
+  /** The task this run works on (Phase 2): graph tools and lifecycle hooks. */
+  graph?: TaskBinding;
+}
+
+/** What a run tells the task graph, and how graph tool calls are answered. */
+export interface TaskBinding {
+  handle(op: GraphOp, args: Record<string, unknown>, ctx: GraphCallContext): Promise<GraphReply>;
+  onStart?(info: {
+    agentId: string;
+    branchId: string;
+    companions: { source: string; branchId: string }[];
+  }): Promise<void> | void;
+  onCheckpoint?(node: TurtleNode): Promise<void> | void;
+  /** Extra text for the agent in a checkpoint's reply (e.g. a reminder to update the brief). */
+  checkpointNote?(): string | undefined;
+  onEnd?(outcome: RunOutcome): Promise<void> | void;
+}
+
+export interface GraphCallContext {
+  agentId: string;
+  /** Latest node and latest semantic checkpoint of this run's primary branch. */
+  headNodeId: string;
+  lastCheckpointId: string;
+  /** Agent working directory (paths in tool arguments are relative to it). */
+  workspace: string;
 }
 
 export type RunMode = "new" | "continue" | "fork";
@@ -455,7 +483,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     session.testsNow = sem.tests;
 
     const startOptions: RunnerStartOptions = {
-      systemPromptAppend: TURTLE_SYSTEM_PROMPT,
+      systemPromptAppend: deps.graph
+        ? `${TURTLE_SYSTEM_PROMPT}\n${TURTLE_GRAPH_PROMPT}`
+        : TURTLE_SYSTEM_PROMPT,
+      ...(deps.graph ? { graphTools: true } : {}),
       permissionMode: sandbox === "docker" ? "bypassPermissions" : "acceptEdits",
       allowedTools: config.agent.allowedTools,
       ...resume,
@@ -468,6 +499,11 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     if (config.workspace.setupCommand && mode !== "continue")
       startOptions.setupCommand = config.workspace.setupCommand;
 
+    await deps.graph?.onStart?.({
+      agentId,
+      branchId: branch.id,
+      companions: companions.map((c) => ({ source: c.id, branchId: c.branch.id })),
+    });
     session.emit("event", {
       type: "started",
       mode,
@@ -650,6 +686,16 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
           this.head.nodeId,
           req.limit ?? 20,
         ) satisfies HistoryEntry[];
+      case "graph": {
+        const binding = this.deps.graph;
+        if (!binding) throw new Error("this run is not part of a task graph");
+        return binding.handle(req.op, req.args ?? {}, {
+          agentId: this.agentId,
+          headNodeId: this.head.nodeId,
+          lastCheckpointId: this.lastSemantic.nodeId,
+          workspace: this.root,
+        }) satisfies Promise<GraphReply>;
+      }
       case "stop":
         await this.finalize(this.interrupted ? "interrupt" : "stop");
         return { ok: true };
@@ -753,7 +799,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         this.log("warn", `artifact ${a.path} not stored: ${errorMessage(err)}`);
       }
     }
-    return { nodeId: node.id, message: checkpointReplyMessage(node.id.slice(0, 6), req.status) };
+    const note = this.deps.graph?.checkpointNote?.();
+    const message = checkpointReplyMessage(node.id.slice(0, 6), req.status);
+    return { nodeId: node.id, message: note ? `${message}\n${note}` : message };
   }
 
   /**
@@ -929,6 +977,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         this.toolLog = [];
       }
       this.emit("event", { type: "node", node });
+      if (p.kind === "semantic")
+        await Promise.resolve(this.deps.graph?.onCheckpoint?.(node)).catch((err) =>
+          this.log("warn", `task graph update failed: ${errorMessage(err)}`),
+        );
       return node;
     });
   }
@@ -1105,6 +1157,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       agentId: this.agentId,
       payload: { ...outcome },
     });
+    await Promise.resolve(this.deps.graph?.onEnd?.(outcome)).catch((err) =>
+      this.log("warn", `task graph update failed: ${errorMessage(err)}`),
+    );
     this.emit("event", { type: "ended", outcome });
     this.resolveDone(outcome);
   }
