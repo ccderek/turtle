@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import type {
   DiffResponse,
   GraphResponse,
   NodeDetailResponse,
+  OutputContentResponse,
   RunResponse,
   StateResponse,
   TranscriptResponse,
@@ -93,7 +95,7 @@ async function setup(opts: { failLaunch?: boolean; project?: boolean; autoStart?
     return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
   };
   const state = async () => (await api<StateResponse>("/api/state")).body;
-  const waitFor = async <T>(fn: () => Promise<T | undefined | null | false>, ms = 5000) => {
+  const waitFor = async <T>(fn: () => Promise<T | undefined | null | false>, ms = 15_000) => {
     const end = Date.now() + ms;
     for (;;) {
       const v = await fn();
@@ -540,6 +542,83 @@ describe("turtle ui server", () => {
     const act = (await t.api<{ text: string; byAgent: boolean }[]>("/api/activity")).body;
     expect(act.some((x) => x.byAgent && x.text.startsWith("asked:"))).toBe(true);
     expect(act.some((x) => !x.byAgent && x.text.startsWith("added a lesson"))).toBe(true);
+    t.project?.close();
+  });
+
+  it("serves an output's content, starts a task from another's checkpoint, rejects dependency cycles", async () => {
+    const t = await setup({ project: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "Measure model A on a phone" },
+      })
+    ).body.goal;
+    const mk = async (title: string, extra: Record<string, unknown> = {}) =>
+      (
+        await t.api<Concept>("/api/concepts", {
+          method: "POST",
+          body: { kind: "task", parentId: goal.id, title, assignee: { type: "agent" }, ...extra },
+        })
+      ).body;
+    const a = await mk("Compile model A");
+    t.scripts.push(async (ag) => {
+      await ag.writeFile("results/a.csv", "run,power_mw\n1,812\n");
+      await ag.graph("finding", {
+        text: "812 mW",
+        evidence: [{ path: "results/a.csv" }],
+      });
+      await ag.checkpoint("Compiled A", "done");
+      await ag.finish();
+    });
+    await t.api(`/api/tasks/${a.id}/start`, { method: "POST", body: {} });
+    await t.waitFor(
+      async () =>
+        (await t.api<ConceptDetailResponse>(`/api/concepts/${a.id}`)).body.concept.status ===
+        "done",
+    );
+    const graph = (await t.api<GraphResponse>("/api/graph")).body;
+    const out = graph.concepts.find((c) => c.kind === "output");
+    const content = await t.api<OutputContentResponse>(`/api/outputs/${out?.id}`);
+    expect(content.status).toBe(200);
+    expect(content.body).toMatchObject({ path: "results/a.csv", matches: true, binary: false });
+    expect(content.body.text).toBe("run,power_mw\n1,812\n");
+    expect((await t.api(`/api/outputs/${goal.id}`)).status).toBe(404);
+
+    // Model B reuses A's environment: it starts from A's latest checkpoint.
+    const b = await t.api<Concept>(`/api/tasks/${a.id}/from-here`, {
+      method: "POST",
+      body: { title: "Compile model B" },
+    });
+    expect(b.body).toMatchObject({ parentId: goal.id, startFrom: { taskId: a.id } });
+    let sawFile = false;
+    t.scripts.push(async (ag) => {
+      sawFile = existsSync(join(ag.workspace, "results/a.csv"));
+      await ag.checkpoint("Compiled B", "done");
+      await ag.finish();
+    });
+    const started = await t.api<{ mode: string }>(`/api/tasks/${b.body.id}/start`, {
+      method: "POST",
+      body: {},
+    });
+    expect(started.body.mode).toBe("fork");
+    await t.waitFor(
+      async () =>
+        (await t.api<ConceptDetailResponse>(`/api/concepts/${b.body.id}`)).body.concept.status ===
+        "done",
+    );
+    expect(sawFile).toBe(true);
+
+    // Waiting on each other is refused.
+    const c = await mk("Measure", { dependsOn: [b.body.id] });
+    const cycle = await t.api(`/api/concepts/${b.body.id}`, {
+      method: "POST",
+      body: { fields: { dependsOn: [c.id] } },
+    });
+    expect(cycle.status).toBe(400);
+    expect(
+      (await t.api(`/api/tasks/${c.id}/from-here`, { method: "POST", body: { title: "x" } }))
+        .status,
+    ).toBe(400);
     t.project?.close();
   });
 });

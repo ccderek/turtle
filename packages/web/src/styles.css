@@ -1626,6 +1626,339 @@ textarea {
   margin: 6px 0 0;
   padding: 0;
 }
+/* ------------------------------------------------------- mind map (M7) */
+fieldset.seg {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.map-scroll {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px)
+    0 0 / 18px 18px,
+    var(--bg);
+  max-height: calc(100vh - 160px);
+}
+.map-canvas {
+  position: relative;
+}
+.map-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.tree-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--muted) 45%, transparent);
+  stroke-width: 1.5;
+}
+.dep-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ask) 45%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.dep-edge.on {
+  stroke: var(--ask);
+  stroke-width: 2.2;
+}
+.dep-head {
+  fill: color-mix(in srgb, var(--ask) 55%, transparent);
+}
+.dep-head.on {
+  fill: var(--ask);
+}
+.map-node {
+  position: absolute;
+  box-sizing: border-box;
+  text-align: left;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+.map-node.selected {
+  outline: 2px solid var(--run);
+  outline-offset: 1px;
+}
+.map-goal {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.map-goal .eyebrow {
+  color: var(--accent);
+}
+.map-title {
+  font-weight: 600;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.map-task {
+  border-left: 4px solid var(--mute);
+  box-shadow: var(--shadow);
+}
+.map-task.tone-run {
+  border-left-color: var(--run);
+}
+.map-task.tone-ok {
+  border-left-color: var(--ok);
+}
+.map-task.tone-ask {
+  border-left-color: var(--ask);
+}
+.map-task.tone-warn {
+  border-left-color: var(--warn);
+}
+.map-task.tone-bad {
+  border-left-color: var(--bad);
+}
+.map-task.gone {
+  border-style: dashed;
+  background: var(--surface-2);
+  box-shadow: none;
+}
+.map-task.gone .map-title {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.map-task-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  height: 100%;
+  padding: 6px 26px 6px 9px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+.map-task-main:hover {
+  background: var(--hover);
+}
+.map-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.map-row .dot {
+  flex: none;
+}
+.map-row.badges {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.map-counts {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.map-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-fold,
+.map-add {
+  position: absolute;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--surface);
+}
+.map-fold {
+  bottom: 4px;
+}
+.map-add {
+  top: 4px;
+  opacity: 0;
+}
+.map-task:hover .map-add,
+.map-add:focus-visible {
+  opacity: 1;
+}
+.map-leaf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+.map-leaf.leaf-lesson {
+  border-color: color-mix(in srgb, #7c5cd6 45%, transparent);
+  background: color-mix(in srgb, #7c5cd6 9%, var(--surface));
+}
+.map-leaf.leaf-question {
+  border-color: color-mix(in srgb, var(--ask) 50%, transparent);
+  background: color-mix(in srgb, var(--ask) 9%, var(--surface));
+}
+.map-leaf.leaf-question .leaf-kind {
+  color: var(--ask);
+}
+.map-leaf-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* task panel tabs */
+.panel-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 10px 0 6px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.panel-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.panel-tabs button.on {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--run);
+}
+.pad-y {
+  padding: 10px 0;
+}
+.task-live {
+  margin: 0 -4px;
+}
+.task-live .prompt details summary {
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+.outputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.outputs > li {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.output-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  text-align: left;
+}
+.output-body {
+  padding: 8px 10px 10px;
+}
+.output-text {
+  margin: 6px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.csv-wrap {
+  margin-top: 6px;
+  max-height: 360px;
+  overflow: auto;
+}
+table.csv {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+table.csv th,
+table.csv td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: right;
+}
+table.csv th {
+  background: var(--surface-2);
+  text-align: left;
+}
+.cp-list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.cp-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: none;
+  text-align: left;
+}
+.cp-row:hover {
+  background: var(--hover);
+}
+.cp-row .cp-sum {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cp-row > .muted {
+  grid-column: 3;
+}
+.deps {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.dep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.icon.small {
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+  padding: 0;
+}
+
 @media (max-width: 1100px) {
   .tasks-layout,
   .tasks-layout.with-panel {

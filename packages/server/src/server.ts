@@ -33,6 +33,7 @@ import type {
   TranscriptResponse,
 } from "./api.js";
 import { graphRoutes, RouteError } from "./graph-routes.js";
+import { readOutput } from "./outputs.js";
 import { TaskRunner } from "./tasks.js";
 import { StateBuilder, transcriptItems } from "./views.js";
 
@@ -314,6 +315,10 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       if (a === "agents" && b && c === "transcript")
         return json(res, transcript(b, Number(url.searchParams.get("after") ?? 0) || 0));
       if (a === "artifacts" && b && !c) return serveArtifact(res, b);
+      if (a === "outputs" && b && !c && o.project) {
+        const primaryId = o.project.config.sources.find((s) => s.path === o.repoRoot)?.id ?? null;
+        return json(res, await readOutput(o.project, { id: primaryId, store, db }, b));
+      }
       const g = graph?.get(parts, url);
       if (g !== undefined) return json(res, g);
       throw new HttpError(404, "not found");

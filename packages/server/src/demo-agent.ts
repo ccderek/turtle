@@ -83,32 +83,20 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
   await pause();
 
   if (/Split the goal into tasks/.test(a.prompt)) {
-    const explore = await a.graph("task", {
-      op: "create",
-      title: `Explore options for: ${goal}`,
-      body: "List 2–3 ways to do it, with trade-offs.",
-    });
-    await pause();
-    const build = await a.graph("task", {
-      op: "create",
-      title: "Build a first version",
-      body: "Pick the simplest option and make it work end to end.",
-      dependsOn: [explore.id],
-    });
-    await pause();
-    await a.graph("task", {
-      op: "create",
-      title: "Check the result: which parts should we keep?",
-      body: "Compare the result with the goal and ask what to keep.",
-      dependsOn: [build.id],
-    });
-    await a.graph("decision", {
-      text: "Plan: explore, build the simplest version, then check it",
-      rationale: "Small steps keep the cost low and the record readable.",
-    });
-    await a.graph("brief", {
-      text: "Planned 3 tasks: explore → build → check. They start as their dependencies finish.",
-    });
+    const plan = /phone|power|device/i.test(goal) ? PHONE_PLAN : GENERIC_PLAN(goal);
+    const ids: string[] = [];
+    for (const t of plan.tasks) {
+      const r = await a.graph("task", {
+        op: "create",
+        title: t.title,
+        body: t.body,
+        ...(t.after.length ? { dependsOn: t.after.map((i) => ids[i]) } : {}),
+      });
+      ids.push(r.id ?? "");
+      await pause();
+    }
+    await a.graph("decision", { text: plan.decision, rationale: plan.rationale });
+    await a.graph("brief", { text: plan.brief });
     await a.finish("Planned.");
     return;
   }
@@ -124,28 +112,40 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
   );
   await listen();
   await pause();
-  await a.writeFile(`results/${slug}.csv`, "metric,value\nruns,3\nscore,0.87\n");
+  const measuring = /measure/i.test(title);
+  await a.writeFile(
+    `results/${slug}.csv`,
+    measuring
+      ? "run,power_mw,latency_ms,fps\n1,812,23.4,41.2\n2,798,23.1,41.6\n3,805,23.6,40.9\n"
+      : "metric,value\nruns,3\nscore,0.87\n",
+  );
   await a.edit(
     `notes/${slug}.md`,
     `# ${title}\n\nStep 1: looked at what exists.\nStep 2: measured it (results/${slug}.csv).\n`,
   );
   await a.graph("finding", {
-    text: `Measured a score of 0.87 over 3 runs for "${title}"`,
+    text: measuring
+      ? "Average 805 mW and 23.4 ms per frame over 3 runs"
+      : `Measured a score of 0.87 over 3 runs for "${title}"`,
     evidence: [{ path: `results/${slug}.csv` }],
   });
   await listen();
   await pause();
 
-  if (!continuing && /\?|\bwhich\b|\bshould\b/i.test(title)) {
+  // The task's own text (before the first "## " section) may say what to ask.
+  const own = a.prompt.split("\n\n## ")[0] ?? "";
+  const ask = /Ask the user: (.+?)(?: \((.+)\))?$/m.exec(own);
+  if (!continuing && (ask || /\?|\bwhich\b|\bshould\b/i.test(title))) {
+    const text = ask?.[1] ?? "Two options fit. Keep the simple one, or try the faster one?";
+    const options = ask
+      ? (ask[2]?.split(" / ") ?? [])
+      : ["Keep the simple one", "Try the faster one"];
     await a.checkpoint(`First pass on ${title}`, "progress");
     await a.graph("brief", {
-      text: "Status: waiting for your decision. Measured 0.87 (evidence: results CSV). Open: which option to keep.",
+      text: `Status: waiting for your decision. First results are in (evidence: results CSV). Open: ${text}`,
     });
-    await a.graph("question", {
-      text: "Two options fit. Keep the simple one, or try the faster one?",
-      options: ["Keep the simple one", "Try the faster one"],
-    });
-    await a.finish("Which option should I keep?");
+    await a.graph("question", { text, ...(options.length ? { options } : {}) });
+    await a.finish(text);
     return;
   }
   if (/fail|wrong/i.test(title)) {
@@ -184,3 +184,70 @@ function slugify(s: string): string {
       .slice(0, 30) || "task"
   );
 }
+
+interface Plan {
+  tasks: { title: string; body: string; after: number[] }[];
+  decision: string;
+  rationale: string;
+  brief: string;
+}
+
+function GENERIC_PLAN(goal: string): Plan {
+  return {
+    tasks: [
+      {
+        title: `Explore options for: ${goal}`,
+        body: "List 2–3 ways to do it, with trade-offs.",
+        after: [],
+      },
+      {
+        title: "Build a first version",
+        body: "Pick the simplest option and make it work end to end.",
+        after: [0],
+      },
+      {
+        title: "Check the result: which parts should we keep?",
+        body: "Compare the result with the goal and ask what to keep.",
+        after: [1],
+      },
+    ],
+    decision: "Plan: explore, build the simplest version, then check it",
+    rationale: "Small steps keep the cost low and the record readable.",
+    brief: "Planned 3 tasks: explore → build → check. They start as their dependencies finish.",
+  };
+}
+
+/** The phone measurement scenario (architecture §3.1). */
+const PHONE_PLAN: Plan = {
+  tasks: [
+    {
+      title: "Connect the phone and set up the environment",
+      body: "Write a script that connects to the phone over adb, checks the battery and thermal state, and installs the benchmark app.",
+      after: [],
+    },
+    {
+      title: "Compile model A for the phone",
+      body: "Compile model A with the phone's toolchain and keep the build script.",
+      after: [],
+    },
+    {
+      title: "Write the test plan",
+      body: "Which inputs, how many runs, warm-up, and what counts as a result.",
+      after: [],
+    },
+    {
+      title: "Record a trace during a run",
+      body: "Capture a system trace of one benchmark run with the environment script.",
+      after: [0],
+    },
+    {
+      title: "Measure power and performance on the phone",
+      body: "Run the plan on the phone, read the power rail and parse the data into a CSV.\nAsk the user: Which sampling rate should the power monitor use? (1 kHz / 10 kHz)",
+      after: [0, 1, 2],
+    },
+  ],
+  decision: "Plan: environment, compile and test plan in parallel, then trace and measure",
+  rationale: "The three setup tasks do not depend on each other; measuring needs all of them.",
+  brief:
+    "Planned 5 tasks. Environment, compile and test plan run in parallel; the trace waits for the environment; measuring waits for all three.",
+};

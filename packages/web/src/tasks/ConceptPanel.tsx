@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { type Concept, type ConceptDetailResponse, get, post } from "../api.js";
 import { ago } from "../format.js";
+import { TASK_STATUS } from "./labels.js";
 import type { GraphCtx } from "./TasksView.js";
-import { TASK_STATUS } from "./TasksView.js";
+import { TaskCode, TaskConversation, TaskOutputs } from "./TaskTabs.js";
 import { evidenceCount, lessonsFor } from "./tree.js";
+
+type Tab = "overview" | "conversation" | "outputs" | "code";
 
 interface Props {
   ctx: GraphCtx;
@@ -36,6 +39,19 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
   const kids = ctx.kids.get(c.id) ?? [];
   const lessons = lessonsFor(ctx.byId, ctx.kids, c.id).filter((l) => l.id !== c.id);
   const st = TASK_STATUS[c.status ?? "todo"];
+  const [tab, setTab] = useState<Tab>("overview");
+  const isTask = c.kind === "task";
+  const nOutputs = kids.filter((k) => k.kind === "output").length;
+  const branchIds = new Set((c.branches ?? []).map((b) => b.branch));
+  const nCheckpoints = ctx.code.nodes.filter(
+    (n) => branchIds.has(n.branchId) && n.kind !== "micro" && n.kind !== "root",
+  ).length;
+  const tabs: [Tab, string][] = [
+    ["overview", "Overview"],
+    ["conversation", "Conversation"],
+    ["outputs", `Outputs${nOutputs ? ` ${nOutputs}` : ""}`],
+    ["code", `Code${nCheckpoints ? ` ${nCheckpoints}` : ""}`],
+  ];
 
   return (
     <div className="panel-inner">
@@ -64,99 +80,145 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
           </button>
         )}
         <EditableTitle ctx={ctx} c={c} />
-        {c.kind === "task" && c.status === "todo" && ctx.graph.waiting?.[c.id] && (
-          <p className="muted small">Not started: {ctx.graph.waiting[c.id]}.</p>
-        )}
-
-        {c.kind === "task" && <TaskSection ctx={ctx} c={c} act={act} />}
-        {c.kind === "goal" && <GoalSection c={c} act={act} />}
-        {c.kind === "question" && <QuestionBox ctx={ctx} q={c} act={act} />}
-        {c.kind === "lesson" && <LessonSection c={c} act={act} detail={detail} ctx={ctx} />}
-        {c.kind === "finding" && (
-          <>
-            {c.body && c.body !== c.title && <p className="node-body">{c.body}</p>}
-            <Evidence ctx={ctx} id={c.id} />
-          </>
-        )}
-        {c.kind === "decision" && c.body && <p className="node-body">{c.body}</p>}
-        {c.kind === "output" && (
-          <dl className="facts">
-            <dt>Path</dt>
-            <dd className="mono">{c.path}</dd>
-            <dt>sha256</dt>
-            <dd className="mono small">{c.sha256}</dd>
-            <dt>Size</dt>
-            <dd>{c.size?.toLocaleString()} bytes</dd>
-          </dl>
-        )}
-
-        {lessons.length > 0 && (c.kind === "task" || c.kind === "goal") && (
-          <section className="sec">
-            <h4>Lessons this {c.kind} follows</h4>
-            {lessons.map((l) => (
+        {isTask && (
+          <div className="panel-tabs" role="tablist" aria-label="Task views">
+            {tabs.map(([t, label]) => (
               <button
-                key={l.id}
+                key={t}
                 type="button"
-                className="lesson-chip"
-                onClick={() => ctx.select(l.id)}
+                role="tab"
+                aria-selected={tab === t}
+                className={tab === t ? "on" : ""}
+                onClick={() => setTab(t)}
               >
-                <span className={`badge ${l.lessonState === "confirmed" ? "ok" : "ask"}`}>
-                  {l.lessonState}
-                </span>{" "}
-                {l.title}
+                {label}
               </button>
             ))}
-          </section>
+          </div>
         )}
-
-        {kids.length > 0 && (c.kind === "task" || c.kind === "goal") && (
-          <section className="sec">
-            <h4>Under this {c.kind}</h4>
-            <ul className="kid-list">
-              {kids.map((k) => (
-                <li key={k.id}>
-                  <button type="button" className="link-row" onClick={() => ctx.select(k.id)}>
-                    <span className={`leaf-kind ${k.kind}`}>{k.kind}</span>{" "}
-                    {k.kind === "output" ? k.path : k.title}
-                    {k.kind === "task" && (
-                      <span className="muted small">
-                        {" "}
-                        · {TASK_STATUS[k.status ?? "todo"]?.label}
-                      </span>
-                    )}
-                    {k.kind === "finding" && evidenceCount(ctx.graph.links, k.id) === 0 && (
-                      <span className="muted small"> · claimed</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {detail && detail.history.length > 0 && (
-          <details className="sec">
-            <summary className="muted small">History ({detail.history.length} changes)</summary>
-            <ul className="history">
-              {detail.history.map((h) => (
-                <li key={h.id} className="small">
-                  <span className="mono muted">{h.id.slice(0, 8)}</span> {h.kind} by{" "}
-                  {h.actor.type === "agent" ? `agent ${h.actor.id.slice(0, 6)}` : "you"} ·{" "}
-                  {ago(h.at)}{" "}
-                  <button
-                    type="button"
-                    className="link small"
-                    onClick={() => act(`/api/ops/${h.id}/undo`, {}, "Undone")}
-                  >
-                    undo
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </details>
+        {isTask && tab === "conversation" && <TaskConversation ctx={ctx} c={c} />}
+        {isTask && tab === "outputs" && <TaskOutputs ctx={ctx} c={c} />}
+        {isTask && tab === "code" && <TaskCode ctx={ctx} c={c} />}
+        {(!isTask || tab === "overview") && (
+          <ConceptOverview
+            ctx={ctx}
+            c={c}
+            act={act}
+            detail={detail}
+            kids={kids}
+            lessons={lessons}
+          />
         )}
       </div>
     </div>
+  );
+}
+
+function ConceptOverview({
+  ctx,
+  c,
+  act,
+  detail,
+  kids,
+  lessons,
+}: {
+  ctx: GraphCtx;
+  c: Concept;
+  act: Act;
+  detail: ConceptDetailResponse | null;
+  kids: Concept[];
+  lessons: Concept[];
+}) {
+  return (
+    <>
+      {c.kind === "task" && c.status === "todo" && ctx.graph.waiting?.[c.id] && (
+        <p className="muted small">Not started: {ctx.graph.waiting[c.id]}.</p>
+      )}
+
+      {c.kind === "task" && <TaskSection ctx={ctx} c={c} act={act} />}
+      {c.kind === "goal" && <GoalSection c={c} act={act} />}
+      {c.kind === "question" && <QuestionBox ctx={ctx} q={c} act={act} />}
+      {c.kind === "lesson" && <LessonSection c={c} act={act} detail={detail} ctx={ctx} />}
+      {c.kind === "finding" && (
+        <>
+          {c.body && c.body !== c.title && <p className="node-body">{c.body}</p>}
+          <Evidence ctx={ctx} id={c.id} />
+        </>
+      )}
+      {c.kind === "decision" && c.body && <p className="node-body">{c.body}</p>}
+      {c.kind === "output" && (
+        <dl className="facts">
+          <dt>Path</dt>
+          <dd className="mono">{c.path}</dd>
+          <dt>sha256</dt>
+          <dd className="mono small">{c.sha256}</dd>
+          <dt>Size</dt>
+          <dd>{c.size?.toLocaleString()} bytes</dd>
+        </dl>
+      )}
+
+      {lessons.length > 0 && (c.kind === "task" || c.kind === "goal") && (
+        <section className="sec">
+          <h4>Lessons this {c.kind} follows</h4>
+          {lessons.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              className="lesson-chip"
+              onClick={() => ctx.select(l.id)}
+            >
+              <span className={`badge ${l.lessonState === "confirmed" ? "ok" : "ask"}`}>
+                {l.lessonState}
+              </span>{" "}
+              {l.title}
+            </button>
+          ))}
+        </section>
+      )}
+
+      {kids.length > 0 && (c.kind === "task" || c.kind === "goal") && (
+        <section className="sec">
+          <h4>Under this {c.kind}</h4>
+          <ul className="kid-list">
+            {kids.map((k) => (
+              <li key={k.id}>
+                <button type="button" className="link-row" onClick={() => ctx.select(k.id)}>
+                  <span className={`leaf-kind ${k.kind}`}>{k.kind}</span>{" "}
+                  {k.kind === "output" ? k.path : k.title}
+                  {k.kind === "task" && (
+                    <span className="muted small"> · {TASK_STATUS[k.status ?? "todo"]?.label}</span>
+                  )}
+                  {k.kind === "finding" && evidenceCount(ctx.graph.links, k.id) === 0 && (
+                    <span className="muted small"> · claimed</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {detail && detail.history.length > 0 && (
+        <details className="sec">
+          <summary className="muted small">History ({detail.history.length} changes)</summary>
+          <ul className="history">
+            {detail.history.map((h) => (
+              <li key={h.id} className="small">
+                <span className="mono muted">{h.id.slice(0, 8)}</span> {h.kind} by{" "}
+                {h.actor.type === "agent" ? `agent ${h.actor.id.slice(0, 6)}` : "you"} · {ago(h.at)}{" "}
+                <button
+                  type="button"
+                  className="link small"
+                  onClick={() => act(`/api/ops/${h.id}/undo`, {}, "Undone")}
+                >
+                  undo
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
   );
 }
 
@@ -222,6 +284,10 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
   const [showAbandon, setShowAbandon] = useState(false);
   const [retryTitle, setRetryTitle] = useState("");
   const [subTitle, setSubTitle] = useState("");
+  const [hereTitle, setHereTitle] = useState("");
+  const hasCheckpoint = ctx.graph.links.some(
+    (l) => !l.removed && l.from === c.id && l.rel === "evidence" && l.to.type === "node",
+  );
   const openQs = (ctx.kids.get(c.id) ?? []).filter((k) => k.kind === "question" && !k.answer);
   const deps = (c.dependsOn ?? [])
     .map((d) => ctx.byId.get(d))
@@ -239,18 +305,10 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
       <dl className="facts">
         <dt>Done by</dt>
         <dd>{c.assignee?.type === "member" ? "you" : "an agent"}</dd>
-        {deps.length > 0 && (
-          <>
-            <dt>After</dt>
-            <dd>
-              {deps.map((d) => (
-                <button key={d.id} type="button" className="link" onClick={() => ctx.select(d.id)}>
-                  {d.title} ({TASK_STATUS[d.status ?? "todo"]?.label}){" "}
-                </button>
-              ))}
-            </dd>
-          </>
-        )}
+        <dt>After</dt>
+        <dd>
+          <DependsOn ctx={ctx} c={c} deps={deps} />
+        </dd>
         {c.startFrom && (
           <>
             <dt>Starts from</dt>
@@ -275,7 +333,7 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
                   key={b.branch}
                   type="button"
                   className="link mono"
-                  onClick={() => ctx.openBranch(b.branch)}
+                  onClick={() => ctx.openCode({ type: "branch", id: b.branch })}
                 >
                   {b.source}:{b.branch.slice(0, 6)}{" "}
                 </button>
@@ -423,6 +481,35 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
         </form>
       )}
 
+      {hasCheckpoint && (
+        <form
+          className="inline sec"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!hereTitle.trim()) return;
+            const r = (await act(
+              `/api/tasks/${c.id}/from-here`,
+              { title: hereTitle },
+              "Added: it starts from this task's latest checkpoint",
+            )) as Concept | null;
+            if (r) {
+              setHereTitle("");
+              ctx.select(r.id);
+            }
+          }}
+        >
+          <input
+            id={`here-${c.id}`}
+            value={hereTitle}
+            onChange={(e) => setHereTitle(e.target.value)}
+            placeholder="New task from here (reuses this task's files)…"
+            title="A task next to this one that starts from its latest checkpoint"
+          />
+          <button type="submit" disabled={!hereTitle.trim()}>
+            Add
+          </button>
+        </form>
+      )}
       {c.parentId && (
         <form
           className="inline sec"
@@ -468,6 +555,12 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
       >
         <input
           id={`sub-${c.id}`}
+          ref={(el) => {
+            if (el && ctx.addUnder === c.id) {
+              el.focus();
+              ctx.setAddUnder(null);
+            }
+          }}
           value={subTitle}
           onChange={(e) => setSubTitle(e.target.value)}
           placeholder="Add a subtask…"
@@ -685,5 +778,91 @@ function Evidence({ ctx, id }: { ctx: GraphCtx; id: string }) {
         })}
       </ul>
     </section>
+  );
+}
+
+/** The tasks this one waits for, with a picker for tasks of the same goal. */
+function DependsOn({ ctx, c, deps }: { ctx: GraphCtx; c: Concept; deps: Concept[] }) {
+  const [adding, setAdding] = useState(false);
+  const goalOf = (x: Concept): string | null => {
+    let cur: Concept | undefined = x;
+    while (cur?.parentId) cur = ctx.byId.get(cur.parentId);
+    return cur?.id ?? null;
+  };
+  // Tasks that (transitively) wait for c cannot become its dependencies.
+  const waitsFor = (x: Concept, target: string, seen = new Set<string>()): boolean => {
+    if (seen.has(x.id)) return false;
+    seen.add(x.id);
+    return (x.dependsOn ?? []).some((d) => {
+      const t = ctx.byId.get(d);
+      return d === target || (t ? waitsFor(t, target, seen) : false);
+    });
+  };
+  const goal = goalOf(c);
+  const have = new Set(c.dependsOn ?? []);
+  const choices = ctx.graph.concepts.filter(
+    (t) =>
+      t.kind === "task" &&
+      !t.dropped &&
+      t.id !== c.id &&
+      !have.has(t.id) &&
+      goalOf(t) === goal &&
+      !waitsFor(t, c.id),
+  );
+  const save = async (next: string[]) => {
+    try {
+      await post(`/api/concepts/${c.id}`, { fields: { dependsOn: next }, base: c.version });
+      ctx.refresh();
+    } catch (err) {
+      ctx.toast((err as Error).message, "bad");
+    }
+  };
+  return (
+    <span className="deps">
+      {deps.length === 0 && !adding && <span className="muted">nothing </span>}
+      {deps.map((d) => (
+        <span key={d.id} className="dep-chip">
+          <button type="button" className="link" onClick={() => ctx.select(d.id)}>
+            {d.title}
+          </button>{" "}
+          <span className="muted small">({TASK_STATUS[d.status ?? "todo"]?.label})</span>
+          <button
+            type="button"
+            className="icon small"
+            aria-label={`Stop waiting for ${d.title}`}
+            onClick={() => save((c.dependsOn ?? []).filter((x) => x !== d.id))}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      {adding ? (
+        <select
+          id={`dep-${c.id}`}
+          aria-label="Wait for another task"
+          defaultValue=""
+          onChange={(e) => {
+            setAdding(false);
+            if (e.target.value) void save([...(c.dependsOn ?? []), e.target.value]);
+          }}
+          onBlur={() => setAdding(false)}
+        >
+          <option value="" disabled>
+            Wait for…
+          </option>
+          {choices.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.title}
+            </option>
+          ))}
+        </select>
+      ) : (
+        choices.length > 0 && (
+          <button type="button" className="link small" onClick={() => setAdding(true)}>
+            + wait for a task
+          </button>
+        )
+      )}
+    </span>
   );
 }

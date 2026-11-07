@@ -1,28 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type ActivityItem, type Concept, type GraphResponse, get, post } from "../api.js";
+import type { Selection } from "../App.js";
+import {
+  type ActivityItem,
+  type Concept,
+  type GraphResponse,
+  get,
+  post,
+  type StateResponse,
+} from "../api.js";
 import { ago } from "../format.js";
 import { ConceptPanel } from "./ConceptPanel.js";
+import { KIND_LABEL, TASK_STATUS } from "./labels.js";
+import { MapView } from "./MapView.js";
 import { buildRows, childrenMap, evidenceCount, progress } from "./tree.js";
-
-export const TASK_STATUS: Record<string, { label: string; tone: string }> = {
-  todo: { label: "to do", tone: "mute" },
-  running: { label: "running", tone: "run" },
-  paused: { label: "paused", tone: "mute" },
-  need_decision: { label: "needs you", tone: "ask" },
-  blocked: { label: "blocked", tone: "warn" },
-  done: { label: "done", tone: "ok" },
-  failed: { label: "failed", tone: "bad" },
-  abandoned: { label: "abandoned (kept)", tone: "mute" },
-  dropped: { label: "dropped", tone: "mute" },
-};
-
-const KIND_LABEL: Record<string, string> = {
-  finding: "finding",
-  decision: "decision",
-  question: "question",
-  output: "output",
-  lesson: "lesson",
-};
 
 export interface GraphCtx {
   graph: GraphResponse;
@@ -33,19 +23,63 @@ export interface GraphCtx {
   refresh: () => void;
   toast: (text: string, tone?: "info" | "ok" | "warn" | "bad") => void;
   short: (id: string) => string;
-  openBranch: (branchId: string) => void;
+  /** Show a checkpoint or branch in the Code tab. */
+  openCode: (sel: Selection) => void;
+  /** The primary source's runs (branches, agents, checkpoints): the task panel's code tabs. */
+  code: StateResponse;
+  codeShort: (id: string) => string;
+  /** A task whose "add a subtask" box should take the cursor (the map's ＋). */
+  addUnder: string | null;
+  setAddUnder: (id: string | null) => void;
 }
 
 interface Props {
   version: number;
   toast: GraphCtx["toast"];
-  openBranch: (branchId: string) => void;
   selected: string | null;
   onSelect: (id: string | null) => void;
+  openCode: (sel: Selection) => void;
+  code: StateResponse;
+  codeShort: (id: string) => string;
+}
+
+type Layout = "map" | "outline";
+const LAYOUT_KEY = "turtle.tasksLayout";
+function readLayout(): Layout {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "outline" ? "outline" : "map";
+  } catch {
+    return "map";
+  }
+}
+
+/** Phones get the outline: a mind map needs width. */
+function useNarrow(): boolean {
+  const q = "(max-width: 720px)";
+  const [narrow, setNarrow] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return narrow;
 }
 
 /** The task graph: goals as mind maps, with what needs you and what agents did (Phase 2). */
-export function TasksView({ version, toast, openBranch, selected, onSelect }: Props) {
+export function TasksView({
+  version,
+  toast,
+  openCode,
+  selected,
+  onSelect,
+  code,
+  codeShort,
+}: Props) {
+  const [layoutPref, setLayoutPref] = useState<Layout>(readLayout);
+  const narrow = useNarrow();
+  const layout: Layout = narrow ? "outline" : layoutPref;
+  const [addUnder, setAddUnder] = useState<string | null>(null);
   const [graph, setGraph] = useState<GraphResponse | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +147,25 @@ export function TasksView({ version, toast, openBranch, selected, onSelect }: Pr
     refresh: () => void refresh(),
     toast,
     short,
-    openBranch,
+    openCode,
+    code,
+    codeShort,
+    addUnder,
+    setAddUnder,
+  };
+  const toggleFold = (id: string) =>
+    setCollapsed((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const isNew = (c: Concept) => c.createdBy.type === "agent" && c.createdAt > seenAt;
+  const pickLayout = (l: Layout) => {
+    setLayoutPref(l);
+    try {
+      localStorage.setItem(LAYOUT_KEY, l);
+    } catch {}
   };
   const running = new Set(graph.running ?? []);
 
@@ -214,6 +266,21 @@ export function TasksView({ version, toast, openBranch, selected, onSelect }: Pr
               ({running.size}/{graph.maxParallel ?? 0} running)
             </span>
           </label>
+          {!narrow && (
+            <fieldset className="seg" aria-label="Layout">
+              {(["map", "outline"] as const).map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  aria-pressed={layout === l}
+                  className={layout === l ? "on" : ""}
+                  onClick={() => pickLayout(l)}
+                >
+                  {l === "map" ? "Map" : "Outline"}
+                </button>
+              ))}
+            </fieldset>
+          )}
           <label className="toggle">
             <input
               type="checkbox"
@@ -237,6 +304,25 @@ export function TasksView({ version, toast, openBranch, selected, onSelect }: Pr
         )}
         {goals.map((g) => {
           const p = progress(kids, g.id);
+          const progressText = `${p.done}/${p.total} tasks done${p.running ? ` · ${p.running} running` : ""}`;
+          if (layout === "map")
+            return (
+              <section key={g.id} className="goal-block">
+                <MapView
+                  ctx={ctx}
+                  goal={g}
+                  collapsed={collapsed}
+                  onToggle={toggleFold}
+                  selected={selected}
+                  isNew={isNew}
+                  onAddUnder={(id) => {
+                    setAddUnder(id);
+                    onSelect(id);
+                  }}
+                  progressText={progressText}
+                />
+              </section>
+            );
           const rows = buildRows(kids, g.id, collapsed);
           return (
             <section key={g.id} className="goal-block">
@@ -248,9 +334,7 @@ export function TasksView({ version, toast, openBranch, selected, onSelect }: Pr
               >
                 <span className="eyebrow">Goal</span>
                 <span className="goal-title">{g.title}</span>
-                <span className="muted small">
-                  {p.done}/{p.total} tasks done{p.running ? ` · ${p.running} running` : ""}
-                </span>
+                <span className="muted small">{progressText}</span>
               </button>
               <ul className="outline">
                 {rows.map((r) => (
@@ -261,16 +345,9 @@ export function TasksView({ version, toast, openBranch, selected, onSelect }: Pr
                     depth={r.depth}
                     hasChildren={r.hasChildren}
                     collapsed={collapsed.has(r.c.id)}
-                    isNew={r.c.createdBy.type === "agent" && r.c.createdAt > seenAt}
+                    isNew={isNew(r.c)}
                     selected={selected === r.c.id}
-                    onToggle={() =>
-                      setCollapsed((s) => {
-                        const n = new Set(s);
-                        if (n.has(r.c.id)) n.delete(r.c.id);
-                        else n.add(r.c.id);
-                        return n;
-                      })
-                    }
+                    onToggle={() => toggleFold(r.c.id)}
                   />
                 ))}
               </ul>

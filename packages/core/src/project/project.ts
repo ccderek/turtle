@@ -286,6 +286,7 @@ export class Project {
       const now = this.requireConcept(id);
       this.checkStale(now, Object.keys(fields) as ConceptField[], base, actor);
       if (fields.parentId) this.checkParent(fields.parentId, id);
+      if (fields.dependsOn) this.checkDeps(id, fields.dependsOn);
     });
     return this.requireConcept(id);
   }
@@ -409,6 +410,35 @@ export class Project {
     );
   }
 
+  /**
+   * A new task next to `taskId` that starts from its latest checkpoint: it reuses that
+   * task's files and conversation (e.g. "Model B" from the environment set up for A).
+   */
+  async taskFromHere(
+    taskId: string,
+    title: string,
+    o: { body?: string; actor?: Actor } = {},
+  ): Promise<Concept> {
+    const t = this.requireConcept(taskId);
+    if (t.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+    const cp = this.db
+      .listLinks({ from: taskId, rel: "evidence" })
+      .filter((l) => l.to.type === "node")
+      .at(-1);
+    if (!cp) throw new OpsError("this task has no checkpoint to start from yet");
+    return this.createConcept(
+      {
+        kind: "task",
+        parentId: t.parentId,
+        title,
+        ...(o.body ? { body: o.body } : {}),
+        assignee: { type: "agent" },
+        startFrom: { taskId, checkpointId: cp.to.id },
+      },
+      o.actor ?? this.me,
+    );
+  }
+
   /** Lessons that apply to a concept: those on it and on every ancestor, nearest first. */
   lessonsInScope(id: string): Concept[] {
     const out: Concept[] = [];
@@ -472,6 +502,22 @@ export class Project {
     for (const d of f.dependsOn ?? []) {
       const t = this.db.getConcept(d);
       if (t?.kind !== "task") throw new OpsError(`dependency ${d} is not a task`);
+    }
+  }
+
+  /** Dependencies are tasks, and following them never leads back to `self`. */
+  private checkDeps(self: string, deps: readonly string[]): void {
+    const seen = new Set<string>();
+    const stack = [...deps];
+    for (const d of deps)
+      if (this.db.getConcept(d)?.kind !== "task")
+        throw new OpsError(`dependency ${d} is not a task`);
+    while (stack.length) {
+      const d = stack.pop() as string;
+      if (d === self) throw new OpsError("that dependency would make a cycle");
+      if (seen.has(d)) continue;
+      seen.add(d);
+      stack.push(...(this.db.getConcept(d)?.dependsOn ?? []));
     }
   }
 

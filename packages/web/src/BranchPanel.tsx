@@ -1,15 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { Ctx } from "./App.js";
-import { get, post, type TranscriptItem, type TranscriptResponse } from "./api.js";
+import { post } from "./api.js";
 import { Composer } from "./Composer.js";
 import { ago, duration, firstLine, money, STATUS_LABEL, statusTone } from "./format.js";
 import { PanelShell } from "./NodePanel.js";
 import { Transcript } from "./Transcript.js";
-
-interface AgentLog {
-  items: TranscriptItem[];
-  lastSeq: number;
-}
+import { useAgentLogs } from "./useAgentLogs.js";
 
 /** A branch and its live conversation: every run (agent) on it, oldest first. */
 export function BranchPanel({ ctx, branchId }: { ctx: Ctx; branchId: string }) {
@@ -22,45 +18,9 @@ export function BranchPanel({ ctx, branchId }: { ctx: Ctx; branchId: string }) {
         .sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
     [state.agents, branchId],
   );
-  const [logs, setLogs] = useState<Record<string, AgentLog>>({});
-  const logsRef = useRef(logs);
-  logsRef.current = logs;
+  const logs = useAgentLogs(agents, version);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-
-  // Fetch new messages: all agents once, then only those still running.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refetch on every change.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      for (const a of agents) {
-        const have = logsRef.current[a.id];
-        if (
-          have &&
-          a.status !== "running" &&
-          a.status !== "starting" &&
-          have.items.some((i) => i.kind === "result")
-        )
-          continue;
-        try {
-          const r = await get<TranscriptResponse>(
-            `/api/agents/${a.id}/transcript?after=${have?.lastSeq ?? 0}`,
-          );
-          if (cancelled) return;
-          if (r.items.length || !have) {
-            setLogs((prev) => {
-              const cur = prev[a.id] ?? { items: [], lastSeq: 0 };
-              if (cur.lastSeq >= r.lastSeq && cur.items.length) return prev;
-              return { ...prev, [a.id]: { items: [...cur.items, ...r.items], lastSeq: r.lastSeq } };
-            });
-          }
-        } catch {}
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [agents, version]);
 
   useLayoutEffect(() => {
     const el = scroller.current?.closest(".panel-scroll");

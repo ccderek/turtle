@@ -192,3 +192,17 @@ export interface ConceptDetailResponse {
   /** Lessons that apply to this concept (on it and its ancestors). */
   lessons: Concept[];
 }
+
+/** GET /api/outputs/:id: an output file's content, from the task's workspace or checkpoints. */
+export interface OutputContentResponse {
+  path: string;
+  size: number;
+  sha256: string;
+  /** False when only another version than the one the agent cited was found. */
+  matches: boolean;
+  /** "workspace" or the checkpoint node it was read from. */
+  at: string;
+  binary: boolean;
+  truncated: boolean;
+  text?: string;
+}

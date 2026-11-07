@@ -290,9 +290,11 @@ export function App() {
             toast={toast}
             selected={concept}
             onSelect={selectConcept}
-            openBranch={(id) => {
+            code={state}
+            codeShort={short}
+            openCode={(sel) => {
               setView("code");
-              select({ type: "branch", id });
+              select(sel);
             }}
           />
         </div>

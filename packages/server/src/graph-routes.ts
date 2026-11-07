@@ -295,6 +295,17 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
             ...(typeof body.budget === "number" && body.budget > 0 ? { budget: body.budget } : {}),
           });
         if (c === "tell") return tellTask(project, b, String(body.text ?? ""));
+        if (c === "from-here") {
+          const title = String(body.title ?? "").trim();
+          if (!title) throw new RouteError(400, "title is required");
+          const t = await project.taskFromHere(
+            b,
+            title,
+            typeof body.body === "string" && body.body ? { body: body.body } : {},
+          );
+          if (tasks?.autoStart) void tasks.tick();
+          return t;
+        }
         if (c === "pause") return stopTask(project, b);
         if (c === "drop") return stopTask(project, b, { drop: true });
         if (c === "abandon") {
