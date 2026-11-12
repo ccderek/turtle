@@ -7,6 +7,7 @@ import type {
   Agent,
   Artifact,
   Branch,
+  CheckResult,
   Concept,
   Link,
   NodeKind,
@@ -18,7 +19,17 @@ import type {
   TurtleNode,
 } from "@turtle/core";
 
-export type { Agent, Artifact, Branch, NodeKind, NodeStatus, SandboxMode, Snapshot, TurtleNode };
+export type {
+  Agent,
+  Artifact,
+  Branch,
+  CheckResult,
+  NodeKind,
+  NodeStatus,
+  SandboxMode,
+  Snapshot,
+  TurtleNode,
+};
 
 export interface NodeView extends TurtleNode {
   /** Nearest displayed ancestor (micro snapshots are skipped unless shown). */
@@ -205,4 +216,9 @@ export interface OutputContentResponse {
   binary: boolean;
   truncated: boolean;
   text?: string;
+}
+
+/** POST /api/tasks/:id/checks: the task's checks, run now in its workspace. */
+export interface CheckRunResponse {
+  results: ({ checkId: string; title: string } & CheckResult)[];
 }

@@ -51,6 +51,23 @@ const run = async (prompt, script, extra = {}) => {
   return { s, out: await s.done };
 };
 
+const OOS_CHECK = `# The lesson "always keep 6 months out of sample", as a check.
+# Every backtest result (a metric,value CSV under results/) must report out_of_sample.
+import csv, pathlib, sys
+
+missing = []
+for path in sorted(pathlib.Path("results").glob("*.csv")):
+    rows = list(csv.reader(path.open()))
+    if rows and rows[0] == ["metric", "value"]:
+        if not any(r and r[0] == "out_of_sample" for r in rows[1:]):
+            missing.append(str(path))
+
+if missing:
+    print("No out-of-sample score in: " + ", ".join(missing))
+    sys.exit(1)
+print("Every backtest result reports an out-of-sample score.")
+`;
+
 const ui = process.argv.includes("--ui");
 let first;
 let decl;
@@ -199,6 +216,15 @@ async function seedGraph() {
   await project.abandonTask(approachA, {
     lesson:
       "Only use data known before the close of t-1, and always keep 6 months out of sample. An in-sample Sharpe alone proves nothing.",
+  });
+  // The lesson, hardened (architecture §3.7): every backtest result must report an
+  // out-of-sample score. B is judged by it at each checkpoint.
+  const lesson = project.db.listConcepts({ parentId: signal.id, kind: "lesson" })[0];
+  await project.addCheck({
+    on: lesson.id,
+    title: "Every backtest result reports an out-of-sample score",
+    file: "check_oos.py",
+    script: OOS_CHECK,
   });
   const b = await project.retryTask(signal.id, "Approach B: price momentum", {
     body: "Use price momentum. Validate out of sample from the start.",

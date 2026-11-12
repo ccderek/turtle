@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import {
   diffBaseOf,
   exportNode,
@@ -16,6 +16,7 @@ import {
   RunSession,
   reconcile,
   requestStop,
+  runTaskChecks,
   type SandboxMode,
   type Summarizer,
   stepNodeIds,
@@ -25,6 +26,7 @@ import {
   uiOwnerFileFor,
 } from "@turtle/core";
 import type {
+  CheckRunResponse,
   DiffResponse,
   LiveEvent,
   NodeDetailResponse,
@@ -298,6 +300,27 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
     };
   }
 
+  /** Run a task's checks now, in its workspace (the Checks section's "Run now"). */
+  async function runChecksNow(project: Project, taskId: string): Promise<CheckRunResponse> {
+    const task = project.getConcept(taskId);
+    if (task?.kind !== "task") throw new HttpError(400, `${taskId} is not a task`);
+    const primaryId = project.config.sources.find((s) => s.path === o.repoRoot)?.id;
+    const ref = task.branches?.find((b) => b.source === primaryId);
+    const branch = ref ? db.getBranch(ref.branch) : null;
+    if (!branch?.workspacePath)
+      throw new HttpError(400, "this task has no workspace yet; start it first");
+    if (task.status === "running")
+      throw new HttpError(409, "the task is running; its checks run at each checkpoint");
+    const cwd =
+      project.config.sources.length > 1 ? dirname(branch.workspacePath) : branch.workspacePath;
+    const runs = await runTaskChecks(project, taskId, cwd, {
+      checkpointId: branch.headNodeId,
+    });
+    return {
+      results: runs.map((r) => ({ checkId: r.check.id, title: r.check.title, ...r.result })),
+    };
+  }
+
   // -------------------------------------------------------------- routing
   async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -327,6 +350,8 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       checkMutation(req);
       const body = await readJson(req);
       if (a === "runs" && !b) return json(res, await startRun(body as unknown as RunRequest), 201);
+      if (a === "tasks" && b && c === "checks" && o.project)
+        return json(res, await runChecksNow(o.project, b));
       const g = graph ? await graph.post(parts, body) : undefined;
       if (g !== undefined) return json(res, g);
       if (a === "branches" && b && c === "stop") return json(res, await stopBranch(b));

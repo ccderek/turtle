@@ -92,6 +92,7 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
           question: "asked:",
           output: "produced",
           lesson: "added a lesson:",
+          check: "added a check:",
         };
         text = `${verb[c.fields.kind] ?? "added"} ${c.fields.kind === "output" ? (c.fields.path ?? c.fields.title) : `"${c.fields.title}"`}`;
       } else if (c.kind === "set") {
@@ -100,7 +101,13 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
           text = `"${title(c.id)}" → ${STATUS_TEXT[c.fields.status] ?? c.fields.status}`;
         else if (c.fields.answer) text = `answered "${title(c.id)}": ${c.fields.answer.text}`;
         else if (c.fields.lessonState) text = `lesson "${title(c.id)}" → ${c.fields.lessonState}`;
-        else if (c.fields.brief) text = `updated the brief of "${title(c.id)}"`;
+        else if (c.fields.checkState) text = `check "${title(c.id)}" → ${c.fields.checkState}`;
+        else if (c.fields.checkResults) {
+          const failed = Object.entries(c.fields.checkResults).filter(([, r]) => !r.ok);
+          text = failed.length
+            ? `checks on "${title(c.id)}": ${failed.length} failed (${failed.map(([k]) => title(k)).join(", ")})`
+            : null;
+        } else if (c.fields.brief) text = `updated the brief of "${title(c.id)}"`;
         else if (c.fields.title || c.fields.body || c.fields.dependsOn)
           text = `edited "${title(c.id)}"`;
       } else if (c.kind === "drop") {
@@ -190,6 +197,18 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
 
     async post(parts: string[], body: Record<string, unknown>): Promise<unknown> {
       const [, a, b, c] = parts;
+      if (a === "checks" && !b) {
+        const on = String(body.on ?? "");
+        const title = String(body.title ?? "").trim();
+        if (!on || !title) throw new RouteError(400, "on and title are required");
+        return project.addCheck({
+          on: concept(on).id,
+          title,
+          file: String(body.file ?? ""),
+          script: String(body.script ?? ""),
+          ...(typeof body.body === "string" && body.body ? { body: body.body } : {}),
+        });
+      }
       if (a === "goals" && !b) {
         const title = String(body.title ?? "").trim();
         if (!title) throw new RouteError(400, "title is required");

@@ -88,7 +88,15 @@ export interface HistoryRequest {
 }
 
 /** Task-graph tools (docs/phase2-spec.md §8): one request kind, the tool name in `op`. */
-export type GraphOp = "task" | "finding" | "decision" | "question" | "brief" | "lesson" | "read";
+export type GraphOp =
+  | "task"
+  | "finding"
+  | "decision"
+  | "question"
+  | "brief"
+  | "lesson"
+  | "check"
+  | "read";
 
 export interface GraphRequest {
   t: "request";

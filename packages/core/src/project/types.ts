@@ -7,7 +7,8 @@ export type ConceptKind =
   | "decision"
   | "question"
   | "output"
-  | "lesson";
+  | "lesson"
+  | "check";
 
 export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "goal",
@@ -17,6 +18,7 @@ export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "question",
   "output",
   "lesson",
+  "check",
 ];
 
 export type TaskStatus =
@@ -66,11 +68,29 @@ export interface ConceptFields {
   size?: number;
   // lesson: applies to the subtree of parentId (architecture D28/D30)
   lessonState?: "proposed" | "confirmed" | "superseded";
+  // check: an executable acceptance condition for the subtree of parentId (D31)
+  /** File name of the check script; its extension picks the interpreter. */
+  file?: string;
+  script?: string;
+  checkState?: "proposed" | "active" | "retired";
+  // task: the latest result of each check in scope, by check id
+  checkResults?: Record<string, CheckResult>;
   // ordering among siblings
   order?: string;
 }
 
 export type ConceptField = Exclude<keyof ConceptFields, "kind">;
+
+/** One run of a check against a task's workspace (architecture §3.7). */
+export interface CheckResult {
+  ok: boolean;
+  at: string;
+  /** The checkpoint it judged, if any. */
+  checkpointId: string | null;
+  /** The check's output (its explanation), clipped. */
+  output: string;
+  ms: number;
+}
 
 export interface Concept extends ConceptFields {
   id: string;
@@ -84,7 +104,7 @@ export interface Concept extends ConceptFields {
   fieldMeta: Partial<Record<ConceptField, { v: number; by: Actor }>>;
 }
 
-export type LinkRel = "evidence" | "provenance" | "reuses";
+export type LinkRel = "evidence" | "provenance" | "reuses" | "enforces";
 
 export interface LinkTarget {
   type: "checkpoint" | "node" | "artifact" | "output" | "concept" | "message";

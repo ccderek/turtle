@@ -178,7 +178,8 @@ export function TasksView({
           !c.answer &&
           byId.get(c.parentId ?? "")?.status !== "abandoned") ||
         (c.kind === "task" && (c.status === "blocked" || c.status === "failed")) ||
-        (c.kind === "lesson" && c.lessonState === "proposed"),
+        (c.kind === "lesson" && c.lessonState === "proposed") ||
+        (c.kind === "check" && c.checkState === "proposed"),
     )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const unseen = activity.filter((a) => a.byAgent && a.at > seenAt).length;
@@ -207,7 +208,9 @@ export function TasksView({
                   ? "Question"
                   : c.kind === "lesson"
                     ? "Lesson to confirm"
-                    : TASK_STATUS[c.status ?? ""]?.label}
+                    : c.kind === "check"
+                      ? "Check to activate"
+                      : TASK_STATUS[c.status ?? ""]?.label}
               </span>
               <span className="title">{c.title}</span>
               <span className="muted small">{byId.get(c.parentId ?? "")?.title ?? ""}</span>
@@ -455,6 +458,11 @@ function OutlineRow({
         {claimed && <span className="badge mute">claimed</span>}
         {lessonState && lessonState !== "confirmed" && (
           <span className="badge ask">{lessonState}</span>
+        )}
+        {c.kind === "check" && c.checkState !== "active" && (
+          <span className={`badge ${c.checkState === "proposed" ? "ask" : "mute"}`}>
+            {c.checkState}
+          </span>
         )}
         {c.kind === "question" && !c.answer && <span className="badge ask">open</span>}
         {isNew && <span className="badge new">new</span>}

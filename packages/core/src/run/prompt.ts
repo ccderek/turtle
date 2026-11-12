@@ -21,7 +21,10 @@ You are working on one task in a shared task graph that a human reads.
 - Keep your brief current with mcp__turtle__brief at each checkpoint: status
   first, then conclusions with evidence, then open questions.
 - Follow the lessons listed in your task. If one turns out wrong, say so with a
-  finding instead of ignoring it.
+  finding instead of ignoring it. When a lesson can be tested by a script, propose
+  a check with mcp__turtle__check; a human activates it.
+- Checks listed in your task run at every checkpoint; a failing one is reported in
+  the checkpoint's reply. Fix the work, not the check.
 - The user may send you new messages while you work. They are the user's own
   instructions: follow them, and record a decision if they change the plan.`;
 

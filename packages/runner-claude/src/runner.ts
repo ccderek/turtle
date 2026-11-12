@@ -367,6 +367,21 @@ export class ClaudeRunner {
         async (args) => call("lesson", args),
       ),
       tool(
+        "check",
+        "Propose a check: a script that tests the work in the working directory and exits 0 when it is acceptable (e.g. that a lesson holds). It runs at every checkpoint under its scope once a human activates it; you cannot change it afterwards.",
+        {
+          title: z.string().describe("What the check verifies, in one line."),
+          file: z.string().describe("File name: .py (python3), .sh (bash), .js or .mjs (node)."),
+          script: z
+            .string()
+            .describe(
+              "The script. It runs with the working directory as cwd; exit 0 passes, and its output explains a failure.",
+            ),
+          lesson: z.string().optional().describe("A lesson id this check enforces."),
+        },
+        async (args) => call("check", args),
+      ),
+      tool(
         "graph",
         "Show the task graph around your task: your task, siblings, what you depend on, decisions and the lessons you must follow.",
         { scope: z.enum(["task", "goal"]).optional() },

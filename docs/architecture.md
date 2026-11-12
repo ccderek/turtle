@@ -1,4 +1,4 @@
-# turtle — Architecture Design (Draft v0.3)
+# turtle — Architecture Design (Draft v0.4)
 
 > Status: Phases 0–1 implemented ([phase0-spec.md](./phase0-spec.md), [phase1-spec.md](./phase1-spec.md)).
 > - v0.2 added the **task graph** (§3.1). turtle becomes an agent-native project management tool: humans and agents share a mind map of tasks, and the code tree is its evidence layer.
@@ -7,6 +7,7 @@
 >   - it syncs local-first like git (§3.3);
 >   - it has roles and runners (§3.4);
 >   - it is built on a small core (§3.5).
+> - v0.4 adds **hardening** (§3.7, D31): what worked and what must hold become code that turtle runs (checks, then recipes), so a replay does not depend on the agent choosing the same path.
 >
 > Items marked `TODO` are open questions.
 
@@ -191,6 +192,8 @@ A lesson carries:
 
 Superseded lessons are no longer injected.
 
+A lesson in a prompt is only advice. §3.7 turns the lessons that matter into executable checks.
+
 ### 3.6 The core object model (v0.3)
 
 **Decision (D27):** like git's objects and refs, turtle's core is small, and everything else is built on it.
@@ -207,6 +210,42 @@ On top, not in the core:
 - notifications, the UI and briefs;
 - permissions enforcement;
 - agent adapters.
+
+### 3.7 Hardening: intent checkpoints become verifiable code (v0.4)
+
+**The problem.** Rewinding is exact: a checkpoint restores the files and the conversation. Replaying is not. After a rewind, or when the same step runs again for a new input ("Model B"), the agent can take a different path. Lessons are text in a prompt, so an agent can still repeat the mistake, and nothing notices. Lessons and rewinds lose their value if what happens after them is left to chance.
+
+**Decision (D31):** an intent that worked, or a lesson that must hold, is **hardened** into code that turtle runs, not text that the agent reads. There are four levels, from soft to hard:
+
+| Level | What | Who runs it | Example |
+|---|---|---|---|
+| **L0 Note** | A lesson as text (§3.5) | The agent reads it | "Only use data known before the close of t-1" |
+| **L1 Check** | An executable acceptance condition on the result. It does not prescribe how the work is done | turtle, at every semantic checkpoint in its scope | `check_no_lookahead.py`: every feature's timestamp is before the t-1 close |
+| **L2 Recipe** | The steps that worked, as a script with parameters and pinned inputs. Replaying the step runs the script; an agent is called only where the script fails | turtle | `connect_phone.sh`, `compile.sh --model A`, `measure.py --rate 10k` |
+| **L3 Policy** | A rule that stops an action before it happens | turtle's hooks | Never touch the live trading account (D29 `confirm: always`) |
+
+**Checks (L1).**
+- **A concept of kind `check`.** It has a scope (its parent: the check applies to every task under it, like a lesson) and a script with a file name (`check_oos.py`).
+  - The script lives **in the graph, not in the agent's workspace**. turtle writes it to a temporary directory and runs it with the task's workspace as the working directory. The agent cannot edit or delete it, and a check cannot be weakened by the work it judges.
+  - An `enforces` link points to the lesson it hardens.
+- **The contract is language-neutral.** Exit code 0 passes and anything else fails; the output is the explanation shown to the agent and the human. The interpreter follows the extension (`.py` → python3, `.sh` → bash, `.js`/`.mjs` → node). Python is the default for data and measurement checks.
+- **States.** A member's check is `active` at once. An agent may only **propose** one (`proposed`): it does not run until a member activates it, because an active check runs on the member's machine outside the sandbox. `retired` checks stop running.
+- **Enforcement.**
+  - Every active check in scope runs at each semantic checkpoint of a task.
+  - A failure is written into the checkpoint's reply, so the agent can fix the work in the same run.
+  - A task whose last checkpoint fails a check cannot end `done`: it ends `blocked` and goes to *Needs you*.
+  - Results are kept on the task (per check: pass or fail, checkpoint, output) and shown on the map.
+- **Limits.**
+  - A check only catches what it tests, so the truthfulness audit (G2) stays.
+  - Measurements of the outside world (a phone's power, market data) need tolerances, not equality.
+  - Checks run with the member's permissions, with a timeout, and without the agent's credentials in the environment.
+
+**Recipes (L2), next step.**
+- **Harden a checkpoint.** An agent (`turtle_harden`) writes the recipe and its checks. turtle then **verifies** it: it replays the recipe in a clean workspace from the parent checkpoint and compares the outputs with the recorded ones (hash, or values within a tolerance). Only a verified recipe marks the checkpoint `hardened`.
+- **Replay from here, with parameters.** turtle runs the chain of recipes and calls an agent only for the step that fails. For "Model B", only the compile step needs an agent, and the rest is the same as for A, so the measurements compare.
+- **When to harden.** Not every step is worth it; exploration stays free. Hardening is offered when a checkpoint is reused (a fork, "new task from here", a retry) or a member marks it "keep".
+
+**What this changes.** Checkpoints keep their exact rewind. Hardened checkpoints add a reproducible replay. Lessons become guarantees where they can be checked and stay advice where they cannot. Replays that reuse recipes spend tokens only on what is new (G4).
 
 ### Glossary
 
@@ -705,6 +744,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D28 | Failed approaches | Abandon, do not delete; turtle drafts a lesson, the human edits it; the lesson hangs on the node rewound to; the retry is a sibling task forked from a checkpoint before the failure and receives the lessons, audited against them |
 | D29 | Irreversible resources | Resources can require confirmation (`confirm: always`); agents stop and ask before using them |
 | D30 | Memory | The task graph is the memory: lessons, findings, decisions with provenance and scope; retrieval by scope (Phase 2), project search over a rebuildable index (Phase 3), shared across projects later (Phase 5) |
+| D31 | Hardening | Intent that worked and lessons that must hold become code turtle runs: L1 checks (scripts stored in the graph, run at every checkpoint in scope, a failing check blocks `done`; agents only propose), L2 recipes verified by a clean replay (next), L3 policies (D29). Language-neutral contract: exit code 0 passes; Python by default |
 
 ## 17. TODO
 

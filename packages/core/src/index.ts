@@ -7,6 +7,7 @@ export * from "./git/message.js";
 export * from "./git/store.js";
 export * from "./ids.js";
 export * from "./ops.js";
+export * from "./project/checks.js";
 export * from "./project/context.js";
 export * from "./project/graph-db.js";
 export * from "./project/migrate.js";

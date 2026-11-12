@@ -1959,6 +1959,81 @@ table.csv th {
   padding: 0;
 }
 
+/* checks (hardened lessons, D31) */
+.leaf-kind.check {
+  background: #0f8a8a;
+  color: #ffffff;
+}
+.map-leaf.leaf-check {
+  border-color: color-mix(in srgb, #0f8a8a 45%, transparent);
+  background: color-mix(in srgb, #0f8a8a 9%, var(--surface));
+}
+.checks {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.check-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.check-row.ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+.check-row.bad {
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+  background: color-mix(in srgb, var(--bad) 5%, var(--surface));
+}
+.check-mark {
+  flex: none;
+  width: 16px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.check-row.ok .check-mark {
+  color: var(--ok);
+}
+.check-row.bad .check-mark {
+  color: var(--bad);
+}
+.check-main {
+  flex: 1;
+  min-width: 0;
+}
+.check-output,
+.check-script {
+  margin: 4px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.code-input {
+  font-family: var(--mono);
+  font-size: 12px;
+  tab-size: 4;
+}
+.check-form {
+  margin-top: 8px;
+}
+.ask-note {
+  border-left: 3px solid var(--ask);
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--ask) 8%, var(--surface));
+}
+
 @media (max-width: 1100px) {
   .tasks-layout,
   .tasks-layout.with-panel {

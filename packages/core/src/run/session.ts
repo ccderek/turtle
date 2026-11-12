@@ -102,7 +102,8 @@ export interface TaskBinding {
     branchId: string;
     companions: { source: string; branchId: string }[];
   }): Promise<void> | void;
-  onCheckpoint?(node: TurtleNode): Promise<void> | void;
+  /** After each semantic checkpoint; `workspace` is the agent's working directory. */
+  onCheckpoint?(node: TurtleNode, ctx: { workspace: string }): Promise<void> | void;
   /** Extra text for the agent in a checkpoint's reply (e.g. a reminder to update the brief). */
   checkpointNote?(): string | undefined;
   onEnd?(outcome: RunOutcome): Promise<void> | void;
@@ -1047,9 +1048,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       }
       this.emit("event", { type: "node", node });
       if (p.kind === "semantic")
-        await Promise.resolve(this.deps.graph?.onCheckpoint?.(node)).catch((err) =>
-          this.log("warn", `task graph update failed: ${errorMessage(err)}`),
-        );
+        await Promise.resolve(
+          this.deps.graph?.onCheckpoint?.(node, { workspace: this.root }),
+        ).catch((err) => this.log("warn", `task graph update failed: ${errorMessage(err)}`));
       return node;
     });
   }

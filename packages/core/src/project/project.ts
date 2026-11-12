@@ -104,7 +104,15 @@ const SET_FIELDS: readonly ConceptField[] = [
   "size",
   "lessonState",
   "order",
+  "file",
+  "script",
+  "checkState",
+  "checkResults",
 ];
+
+/** Check scripts: a plain file name whose extension picks the interpreter (D31). */
+export const CHECK_FILE = /^[\w.-]{1,80}\.(py|sh|js|mjs)$/;
+const MAX_CHECK_SCRIPT = 64 * 1024;
 
 /** Thrown when an agent edits a field a member changed after the agent last read it. */
 export class StaleEditError extends OpsError {
@@ -287,6 +295,10 @@ export class Project {
       this.checkStale(now, Object.keys(fields) as ConceptField[], base, actor);
       if (fields.parentId) this.checkParent(fields.parentId, id);
       if (fields.dependsOn) this.checkDeps(id, fields.dependsOn);
+      if (fields.file !== undefined || fields.script !== undefined) {
+        const c = this.requireConcept(id);
+        this.checkScript(fields.file ?? c.file, fields.script ?? c.script);
+      }
     });
     return this.requireConcept(id);
   }
@@ -439,6 +451,47 @@ export class Project {
     );
   }
 
+  /** Active checks that apply to a concept: those on it and on every ancestor (D31). */
+  checksInScope(id: string, states: readonly string[] = ["active"]): Concept[] {
+    const out: Concept[] = [];
+    let cur = this.db.getConcept(id);
+    while (cur) {
+      for (const c of this.db.listConcepts({ parentId: cur.id, kind: "check" }))
+        if (states.includes(c.checkState ?? "active")) out.push(c);
+      cur = cur.parentId ? this.db.getConcept(cur.parentId) : null;
+    }
+    return out;
+  }
+
+  /**
+   * A check for the subtree of `on` (architecture §3.7). On a lesson, it applies where the
+   * lesson does and links to it with `enforces`. A member's check is active at once; an
+   * agent's is proposed until a member activates it.
+   */
+  async addCheck(
+    o: { on: string; title: string; file: string; script: string; body?: string },
+    actor: Actor = this.me,
+  ): Promise<Concept> {
+    const on = this.requireConcept(o.on);
+    const lesson = on.kind === "lesson" ? on : null;
+    const scope = lesson ? lesson.parentId : on.id;
+    if (!scope) throw new OpsError("a check needs a scope");
+    const c = await this.createConcept(
+      {
+        kind: "check",
+        parentId: scope,
+        title: o.title.trim(),
+        ...(o.body ? { body: o.body } : {}),
+        file: o.file.trim(),
+        script: o.script,
+        checkState: actor.type === "agent" ? "proposed" : "active",
+      },
+      actor,
+    );
+    if (lesson) await this.link(c.id, "enforces", { type: "concept", id: lesson.id }, actor);
+    return c;
+  }
+
   /** Lessons that apply to a concept: those on it and on every ancestor, nearest first. */
   lessonsInScope(id: string): Concept[] {
     const out: Concept[] = [];
@@ -503,6 +556,14 @@ export class Project {
       const t = this.db.getConcept(d);
       if (t?.kind !== "task") throw new OpsError(`dependency ${d} is not a task`);
     }
+    if (f.kind === "check") this.checkScript(f.file, f.script);
+  }
+
+  private checkScript(file: string | undefined, script: string | undefined): void {
+    if (!file || !CHECK_FILE.test(file))
+      throw new OpsError("a check needs a file name ending in .py, .sh, .js or .mjs");
+    if (!script?.trim()) throw new OpsError("a check needs a script");
+    if (script.length > MAX_CHECK_SCRIPT) throw new OpsError("the check script is too long");
   }
 
   /** Dependencies are tasks, and following them never leads back to `self`. */

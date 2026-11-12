@@ -9,11 +9,12 @@ export interface Row {
 const ORDER: Record<string, number> = {
   question: 0,
   lesson: 1,
-  decision: 2,
-  finding: 3,
-  output: 4,
-  task: 5,
-  goal: 6,
+  check: 2,
+  decision: 3,
+  finding: 4,
+  output: 5,
+  task: 6,
+  goal: 7,
 };
 
 /** Children of each concept, in display order (dropped ones only when asked). */

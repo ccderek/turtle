@@ -427,6 +427,7 @@ describe("ClaudeRunner with a mocked SDK", () => {
       "question",
       "brief",
       "lesson",
+      "check",
       "graph",
       "history",
     ]);

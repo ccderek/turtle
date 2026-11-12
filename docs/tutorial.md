@@ -301,7 +301,7 @@ Stop the UI with Ctrl-C in its terminal.
 
 ---
 
-## Part D — The task graph (offline, about 15 minutes)
+## Part D — The task graph (offline, about 20 minutes)
 
 Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **Tasks** tab shows a seeded example: a friend's trading system. One approach to the investment signal (A, news sentiment) was tried, failed out of sample and was abandoned. Its lesson sits on the *Investment signal* node, and approach B starts from the checkpoint before A. The demo agent works in small steps (about 5 s per task) and calls no model.
 
@@ -335,7 +335,11 @@ Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **
    - Click *Compile model A*. Under **New task from here**, type `Compile model B with the new toolchain` and press **Add**. The new task starts from A's latest checkpoint (the `from …` badge), with A's files already there.
    - Press **Abandon…** on it, write `The new toolchain needs the vendor's NPU driver; check the driver first.`, and press **Abandon and keep the lesson**. The lesson appears on the goal: every later task under it gets it in its prompt.
    - On any task's *Overview*, **+ wait for a task** adds a dependency (turtle refuses one that would make a loop), and × removes it.
-9. **D9. Undo and the Code tab.**
+9. **D9. A lesson that is enforced.**
+   - Back in the trading goal, the teal **check** under *Investment signal* is the lesson "keep 6 months out of sample" written as a script (`check_oos.py`). Click it to read the script.
+   - turtle ran it at every checkpoint of *Approach B*. Open B, and look at *Activity* and the *Conversation* tab: the first "done" checkpoint failed the check, the agent was told why, added the out-of-sample score and passed. B's card shows **✓ checks**.
+   - Click the lesson you wrote in D8 (the NPU driver), press **Enforce with a check…**, and add the check. Every later task under that goal is judged by it: a task cannot end done while a check fails, and the agent cannot edit the check.
+10. **D10. Undo and the Code tab.**
    - Open any task, expand **History** and press **undo** on a change.
    - The *Code* line in a task's panel opens that task's branch in the **Code** tab: the same checkpoints and diffs as Part A.
 
@@ -364,7 +368,7 @@ Mac: (chip, macOS version)   Node: (version)   Auth: subscription token / API ke
 Part A:  A1 [ ]  A2 [ ]  A3 [ ]  A4 [ ]  A5 [ ]  A6 [ ]  A7 [ ]  A8 [ ]
 Part B:  U1 [ ]  U2 [ ]  U3 [ ]  U4 [ ]  U5 [ ]  U6 [ ]   B7 export [ ]   B8 doctor OK [ ]
 Part C:  (skipped / worked / problem)
-Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]  D9 [ ]
+Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]  D9 [ ]  D10 [ ]
 
 1. Could you keep up with what the agents were doing? Where did you lose track?
 2. What did you look for on screen and not find?

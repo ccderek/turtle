@@ -18,6 +18,7 @@ import {
 } from "@turtle/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
+  CheckRunResponse,
   Concept,
   ConceptDetailResponse,
   DiffResponse,
@@ -619,6 +620,79 @@ describe("turtle ui server", () => {
       (await t.api(`/api/tasks/${c.id}/from-here`, { method: "POST", body: { title: "x" } }))
         .status,
     ).toBe(400);
+    t.project?.close();
+  });
+
+  it("adds a check to a lesson, enforces it on a task run, and runs it on demand", async () => {
+    const t = await setup({ project: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "Trade", plan: false },
+      })
+    ).body.goal;
+    const lesson = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: {
+          kind: "lesson",
+          parentId: goal.id,
+          title: "Keep a README",
+          lessonState: "confirmed",
+        },
+      })
+    ).body;
+    const check = await t.api<Concept>("/api/checks", {
+      method: "POST",
+      body: {
+        on: lesson.id,
+        title: "NOTES.md exists",
+        file: "notes.sh",
+        script: 'test -f NOTES.md || { echo "NOTES.md is missing"; exit 1; }\n',
+      },
+    });
+    expect(check.body).toMatchObject({ kind: "check", parentId: goal.id, checkState: "active" });
+    expect(
+      (
+        await t.api("/api/checks", {
+          method: "POST",
+          body: { on: goal.id, title: "x", file: "x.exe", script: "x" },
+        })
+      ).status,
+    ).toBe(400);
+
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Write it", assignee: { type: "agent" } },
+      })
+    ).body;
+    t.scripts.push(async (a) => {
+      await a.edit("x.txt", "x\n");
+      await a.checkpoint("Wrote x", "done");
+      await a.finish();
+    });
+    await t.api(`/api/tasks/${task.id}/start`, { method: "POST", body: {} });
+    await t.waitFor(
+      async () =>
+        (await t.api<ConceptDetailResponse>(`/api/concepts/${task.id}`)).body.concept.status ===
+        "blocked",
+    );
+    const act = (await t.api<{ text: string }[]>("/api/activity")).body;
+    expect(act.some((x) => x.text.startsWith("added a check:"))).toBe(true);
+    expect(act.some((x) => /checks on "Write it": 1 failed/.test(x.text))).toBe(true);
+
+    // Fixed by hand in the workspace, then run on demand.
+    const ws = t.db.getBranch(
+      (await t.api<ConceptDetailResponse>(`/api/concepts/${task.id}`)).body.concept.branches?.[0]
+        ?.branch ?? "",
+    )?.workspacePath;
+    await writeFile(join(ws ?? "", "NOTES.md"), "notes\n");
+    const now = await t.api<CheckRunResponse>(`/api/tasks/${task.id}/checks`, {
+      method: "POST",
+      body: {},
+    });
+    expect(now.body.results).toMatchObject([{ checkId: check.body.id, ok: true }]);
     t.project?.close();
   });
 });

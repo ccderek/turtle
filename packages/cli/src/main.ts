@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Command } from "commander";
 import {
   answerCommand,
+  checkCommand,
   goalCommand,
   graphCommand,
   lessonCommand,
@@ -199,6 +200,19 @@ program
     if (action !== "add" && action !== "confirm" && action !== "supersede")
       throw new Error(`unknown action: ${action}`);
     print(await lessonCommand(cwd(), action, ref, o));
+  });
+
+program
+  .command("check")
+  .description("checks (hardened lessons): add | run | list | activate | retire")
+  .argument("<action>", "add | run | list | activate | retire")
+  .argument("<concept>", "add: the lesson, task or goal; run/list: the task; else the check")
+  .option("-s, --script <file>", "add: the check script (.py, .sh, .js or .mjs)")
+  .option("-t, --title <text>", "add: what the check verifies")
+  .action(async (action: string, ref: string, o: { script?: string; title?: string }) => {
+    if (!["add", "run", "list", "activate", "retire"].includes(action))
+      throw new Error(`unknown action: ${action}`);
+    print(await checkCommand(cwd(), action as "add", ref, o));
   });
 
 program

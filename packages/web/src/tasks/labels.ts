@@ -16,4 +16,5 @@ export const KIND_LABEL: Record<string, string> = {
   question: "question",
   output: "output",
   lesson: "lesson",
+  check: "check",
 };

@@ -18,6 +18,7 @@ import {
 } from "../run/session.js";
 import type { Summarizer } from "../run/summarizer.js";
 import type { RunnerLauncher } from "../run/transport.js";
+import { checkReplyNote, failingChecks, runTaskChecks, type TaskCheckRun } from "./checks.js";
 import { assembleTaskContext, graphText } from "./context.js";
 import type { Project } from "./project.js";
 import { openRunSources } from "./sources.js";
@@ -38,6 +39,8 @@ export class TaskRunBinding implements TaskBinding {
   private findings = 0;
   private readonly seen = new Map<string, number>();
   private briefUpdated = false;
+  /** Check results of the latest checkpoint, for its reply. */
+  private lastChecks: TaskCheckRun[] | null = null;
 
   constructor(
     private readonly project: Project,
@@ -73,15 +76,32 @@ export class TaskRunBinding implements TaskBinding {
   }
 
   checkpointNote(): string | undefined {
-    if (this.briefUpdated) return undefined;
-    const brief = this.task.brief;
-    return brief
-      ? `Your task's brief was not updated in this run. It still says: "${brief.split("\n")[0]?.slice(0, 160)}". Update it with mcp__turtle__brief.`
-      : "Your task has no brief yet. Write one with mcp__turtle__brief: status first, then conclusions with evidence, then open questions.";
+    const notes: string[] = [];
+    if (this.lastChecks) {
+      const n = checkReplyNote(this.lastChecks);
+      if (n) notes.push(n);
+      this.lastChecks = null;
+    }
+    if (!this.briefUpdated) {
+      const brief = this.task.brief;
+      notes.push(
+        brief
+          ? `Your task's brief was not updated in this run. It still says: "${brief.split("\n")[0]?.slice(0, 160)}". Update it with mcp__turtle__brief.`
+          : "Your task has no brief yet. Write one with mcp__turtle__brief: status first, then conclusions with evidence, then open questions.",
+      );
+    }
+    return notes.length ? notes.join("\n") : undefined;
   }
 
-  async onCheckpoint(node: TurtleNode) {
+  async onCheckpoint(node: TurtleNode, ctx: { workspace: string }) {
     await this.project.link(this.taskId, "evidence", { type: "node", id: node.id }, this.actor);
+    // Hardened acceptance conditions (D31): every active check in scope judges the work.
+    if (node.status === "killed" || node.status === "failed") return;
+    if (!this.project.checksInScope(this.taskId).length) return;
+    this.lastChecks = await runTaskChecks(this.project, this.taskId, ctx.workspace, {
+      checkpointId: node.id,
+      actor: this.actor,
+    });
   }
 
   async onEnd(outcome: RunOutcome) {
@@ -97,8 +117,11 @@ export class TaskRunBinding implements TaskBinding {
       killed: "paused",
       failed: "failed",
     };
-    const status: TaskStatus =
+    let status: TaskStatus =
       openQuestion && outcome.reason !== "failed" ? "need_decision" : map[outcome.reason];
+    // A task cannot end done while a check in its scope fails on its last checkpoint.
+    const failing = status === "done" ? failingChecks(this.project, task) : [];
+    if (failing.length) status = "blocked";
     const fields: Partial<Concept> = { status };
     if (!task.brief) {
       const last = this.project.db
@@ -230,6 +253,25 @@ export class TaskRunBinding implements TaskBinding {
         await p.updateConcept(this.taskId, { brief: text }, { actor: this.actor });
         this.briefUpdated = true;
         return { message: "Brief updated." };
+      }
+      case "check": {
+        const title = str("title");
+        if (!title) throw new OpsError("title is required");
+        const on = args.lesson ? p.resolveConcept(String(args.lesson)).id : this.taskId;
+        if (
+          on !== this.taskId &&
+          !p.lessonsInScope(this.taskId).some((l) => l.id === on) &&
+          !this.isBelowTask(on)
+        )
+          throw new OpsError("a check may enforce a lesson in your scope, or apply to your task");
+        const c = await p.addCheck(
+          { on, title, file: str("file"), script: String(args.script ?? "") },
+          this.actor,
+        );
+        return {
+          id: c.id,
+          message: `Check ${short(c.id)} proposed. It runs once a human activates it.`,
+        };
       }
       case "lesson": {
         const text = str("text");

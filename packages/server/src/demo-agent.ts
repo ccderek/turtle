@@ -163,7 +163,35 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
   await a.edit(`notes/${slug}.md`, `# ${title}\n\nDone. Score 0.87 over 3 runs.\n`);
   await listen();
   await pause();
-  await a.checkpoint(`${title}: done`, "done");
+  const cp = await a.checkpoint(`${title}: done`, "done");
+  // A check in scope failed (D31): fix what it names, when the demo knows how.
+  if (/FAILED/.test(cp.message)) {
+    await a.say(`(demo agent) A check failed:\n${cp.message.split("\n").slice(1).join("\n")}`);
+    await pause();
+    if (/out.of.sample/i.test(cp.message)) {
+      await a.say("Adding the out-of-sample evaluation the check asks for.");
+      await a.writeFile(
+        `results/${slug}.csv`,
+        "metric,value\nruns,3\nscore,0.87\nout_of_sample,0.64\n",
+      );
+      await a.graph("finding", {
+        text: "Out of sample (last 6 months) the score drops to 0.64",
+        evidence: [{ path: `results/${slug}.csv` }],
+      });
+      await pause();
+      const again = await a.checkpoint(`${title}: done, with out-of-sample score`, "done");
+      if (/FAILED/.test(again.message)) {
+        await a.finish("A check still fails; I need help.");
+        return;
+      }
+    } else {
+      await a.graph("brief", {
+        text: "Status: blocked by a failing check that the demo agent cannot fix.",
+      });
+      await a.finish("A check fails and I do not know how to fix it.");
+      return;
+    }
+  }
   await a.graph("brief", {
     text: `Status: done. Score 0.87 over 3 runs (evidence: results/${slug}.csv). No open questions.`,
   });

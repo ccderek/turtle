@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Concept } from "../api.js";
+import { checkVerdict } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
 import { countsOf, layoutGoal, type MapNode } from "./map.js";
 import type { GraphCtx } from "./TasksView.js";
@@ -152,6 +153,7 @@ function MapCard({
 
   if (c.kind !== "task") {
     const lesson = c.kind === "lesson";
+    const label = lesson ? "lesson" : c.kind === "check" ? "check" : "asks";
     return (
       <button
         type="button"
@@ -161,9 +163,12 @@ function MapCard({
         onClick={() => ctx.select(c.id)}
         title={c.body || c.title}
       >
-        <span className={`leaf-kind ${c.kind}`}>{lesson ? "lesson" : "asks"}</span>
+        <span className={`leaf-kind ${c.kind}`}>{label}</span>
         <span className="map-leaf-text">{c.title}</span>
         {lesson && c.lessonState === "proposed" && <span className="badge ask">proposed</span>}
+        {c.kind === "check" && c.checkState === "proposed" && (
+          <span className="badge ask">proposed</span>
+        )}
         {isNew && <span className="badge new">new</span>}
       </button>
     );
@@ -174,6 +179,7 @@ function MapCard({
   const waiting = ctx.graph.waiting?.[c.id];
   const sub = waiting && c.status === "todo" ? waiting : (c.brief ?? "").split("\n")[0];
   const counts = countsOf(ctx.kids, c.id);
+  const verdict = checkVerdict(ctx, c);
   return (
     <div
       className={`map-node map-task tone-${st.tone}${selected ? " selected" : ""}${gone ? " gone" : ""}`}
@@ -198,6 +204,16 @@ function MapCard({
             <span className="badge mono-badge">from {c.startFrom.checkpointId.slice(0, 6)}</span>
           )}
           {isNew && <span className="badge new">new</span>}
+          {verdict && (
+            <span
+              className={`badge ${verdict.failed ? "bad" : "ok"}`}
+              title="Checks in scope, at the last checkpoint"
+            >
+              {verdict.failed
+                ? `✗ ${verdict.failed} check${verdict.failed > 1 ? "s" : ""}`
+                : "✓ checks"}
+            </span>
+          )}
           {counts.length > 0 && (
             <span className="map-counts muted small">{counts.join(" · ")}</span>
           )}

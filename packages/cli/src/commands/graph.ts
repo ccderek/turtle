@@ -1,5 +1,5 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
   type Concept,
   GitStore,
@@ -10,6 +10,7 @@ import {
   OpsError,
   type Project,
   pidFileFor,
+  runTaskChecks,
   type SandboxMode,
   shortConceptIds,
   startTaskRun,
@@ -377,5 +378,74 @@ export async function taskPauseCommand(cwd: string, ref: string): Promise<string
         ? "pausing at the next tool boundary (resume: turtle task start)"
         : "the task was not running",
     ];
+  });
+}
+
+/**
+ * Checks (architecture §3.7): `add` reads a script file and puts it on a lesson (which it
+ * then enforces) or on a task or goal; `run` runs a task's checks in its workspace now;
+ * `activate` / `retire` change a check's state; `list` shows the checks of a task.
+ */
+export async function checkCommand(
+  cwd: string,
+  action: "add" | "run" | "activate" | "retire" | "list",
+  ref: string,
+  o: { script?: string; title?: string },
+): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const short = shortConceptIds(p);
+    const target = p.resolveConcept(ref);
+    if (action === "add") {
+      if (!o.script) throw new CliError("--script <file> is required");
+      const script = await readFile(o.script, "utf8");
+      const ch = await p.addCheck({
+        on: target.id,
+        title: o.title ?? firstLine(script.replace(/^[#/!\s]+/, "")) ?? basename(o.script),
+        file: basename(o.script),
+        script,
+      });
+      const s2 = shortConceptIds(p);
+      return [
+        `check ${c.bold(s2(ch.id))} added (${ch.checkState}): it runs at every checkpoint under ${s2(ch.parentId ?? "")}`,
+      ];
+    }
+    if (action === "activate" || action === "retire") {
+      if (target.kind !== "check") throw new CliError(`${ref} is not a check`);
+      await p.updateConcept(target.id, {
+        checkState: action === "activate" ? "active" : "retired",
+      });
+      return [`check ${short(target.id)} ${action === "activate" ? "active" : "retired"}`];
+    }
+    if (target.kind !== "task") throw new CliError(`${ref} is not a task`);
+    const checks = p.checksInScope(target.id);
+    if (action === "list") {
+      if (!checks.length) return ["no checks apply to this task"];
+      return checks.map((k) => {
+        const r = target.checkResults?.[k.id];
+        const mark = r ? (r.ok ? c.green("✓") : c.red("✗")) : c.dim("·");
+        return `${mark} ${short(k.id)} ${k.title} ${c.dim(k.file ?? "")}${r && !r.ok ? `\n    ${r.output.split("\n").join("\n    ")}` : ""}`;
+      });
+    }
+    // run: in the task's workspace on its primary branch.
+    for (const ref2 of target.branches ?? []) {
+      const src = p.config.sources.find((s) => s.id === ref2.source);
+      if (!src) continue;
+      const store = await GitStore.open(src.path);
+      const db = TurtleDb.open(join(store.turtleDir, "turtle.db"));
+      try {
+        const b = db.getBranch(ref2.branch);
+        if (!b?.workspacePath) continue;
+        const dir = p.config.sources.length > 1 ? dirname(b.workspacePath) : b.workspacePath;
+        const runs = await runTaskChecks(p, target.id, dir, { checkpointId: b.headNodeId });
+        if (!runs.length) return ["no checks apply to this task"];
+        return runs.map(
+          (r) =>
+            `${r.result.ok ? c.green("✓") : c.red("✗")} ${r.check.title}${r.result.ok ? "" : `\n    ${r.result.output.split("\n").join("\n    ")}`}`,
+        );
+      } finally {
+        db.close();
+      }
+    }
+    throw new CliError("this task has no workspace yet; start it first");
   });
 }

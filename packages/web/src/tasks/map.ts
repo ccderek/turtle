@@ -39,7 +39,12 @@ export interface MapLayout {
 
 /** Concepts drawn as their own node: tasks, lessons and open questions. The rest are counted on the card. */
 export function onMap(c: Concept): boolean {
-  return c.kind === "task" || c.kind === "lesson" || (c.kind === "question" && !c.answer);
+  return (
+    c.kind === "task" ||
+    c.kind === "lesson" ||
+    (c.kind === "check" && c.checkState !== "retired") ||
+    (c.kind === "question" && !c.answer)
+  );
 }
 
 /**

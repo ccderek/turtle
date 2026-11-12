@@ -29,6 +29,14 @@ function lessonLines(p: Project, task: Concept, short: (id: string) => string): 
   });
 }
 
+function checkLines(p: Project, task: Concept): string[] {
+  return p.checksInScope(task.id).map((c) => {
+    const last = task.checkResults?.[c.id];
+    const state = last ? (last.ok ? " [passed last time]" : " [FAILED last time]") : "";
+    return `### ${c.title} (${c.file})${state}\n\`\`\`\n${clip(c.script ?? "", 1500)}\n\`\`\``;
+  });
+}
+
 function dependencyLines(p: Project, task: Concept): string[] {
   const out: string[] = [];
   for (const id of task.dependsOn ?? []) {
@@ -79,6 +87,11 @@ export function assembleTaskContext(p: Project, taskId: string, instruction?: st
   if (lessons.length)
     parts.push(
       `## Lessons you must follow\nEarlier work under this part of the project learned these. Do not repeat those mistakes.\n${lessons.join("\n")}`,
+    );
+  const checks = checkLines(p, task);
+  if (checks.length)
+    parts.push(
+      `## Checks that must pass\nturtle runs these scripts in your working directory at every checkpoint. The task cannot end done while one fails, and you cannot change them.\n\n${checks.join("\n\n")}`,
     );
   const decisions = decisionLines(p, task);
   if (decisions.length) parts.push(`## Decisions already made\n${decisions.join("\n")}`);

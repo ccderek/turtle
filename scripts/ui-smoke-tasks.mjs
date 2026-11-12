@@ -91,6 +91,17 @@ try {
   await badge("Go live", "done").waitFor(long);
   await closePanel();
 
+  step("the lesson's check judged B: it failed once, the agent fixed the work, B passed");
+  await page.waitForSelector(".map-leaf.leaf-check");
+  await card("Approach B").locator(".badge", { hasText: "✓ checks" }).waitFor(long);
+  await open("Approach B");
+  await page.locator(".tasks-panel .check-row.ok").waitFor(long);
+  await shot("04-check-passed");
+  await page.locator(".tasks-panel .check-row .link").first().click();
+  await page.locator(".tasks-panel .check-script").waitFor(long);
+  await shot("05-check");
+  await closePanel();
+
   step("the phone scenario: a new goal, and the planner splits it into 5 tasks");
   await page.getByRole("button", { name: "New goal" }).first().click();
   await page.locator("#goal-title").fill("Measure power and performance of model A on a phone");
@@ -100,11 +111,11 @@ try {
     .locator(".map-task", { hasText: "Measure power and performance" })
     .locator(".map-sub", { hasText: "waiting for" })
     .waitFor(long);
-  await shot("04-phone-plan");
+  await shot("06-phone-plan");
 
   step("setup tasks run in parallel; measuring waits for all three, then asks you");
   await page.locator(".need-card", { hasText: "sampling rate" }).waitFor({ timeout: 120_000 });
-  await shot("05-phone-question");
+  await shot("07-phone-question");
   await page.locator(".need-card", { hasText: "sampling rate" }).click();
   await page.locator(".ask-box .actions-row button", { hasText: "10 kHz" }).click();
   await badge("Measure power and performance", "done").waitFor(long);
@@ -113,12 +124,12 @@ try {
   await open("Measure power and performance");
   await tab("Outputs").click();
   await page.locator("table.csv th", { hasText: "power_mw" }).waitFor(long);
-  await shot("06-outputs");
+  await shot("08-outputs");
   await tab("Conversation").click();
   await page.locator(".task-live .tool").first().waitFor(long);
   await tab("Code").click();
   await page.locator(".cp-row").first().waitFor(long);
-  await shot("07-checkpoints");
+  await shot("09-checkpoints");
 
   step("model B from the environment: a new task that starts from a checkpoint");
   await open("Compile model A");
@@ -128,7 +139,7 @@ try {
   await page.locator(".tasks-panel input[id^=here-] + button").click();
   await card("Compile model B").locator(".mono-badge").waitFor(long);
   await badge("Compile model B", "done").waitFor(long);
-  await shot("08-model-b");
+  await shot("10-model-b");
 
   step("abandon a task and keep the lesson");
   await open("Compile model B");
@@ -140,19 +151,32 @@ try {
   await badge("Compile model B", "abandoned.*").waitFor(long);
   await page.locator(".map-leaf.leaf-lesson", { hasText: "NPU driver" }).waitFor(long);
   await closePanel();
-  await shot("09-abandoned");
+  await shot("11-abandoned");
+
+  step("harden that lesson into a check from the browser");
+  await page.locator(".map-leaf.leaf-lesson", { hasText: "NPU driver" }).click();
+  await page.getByRole("button", { name: "Enforce with a check…" }).click();
+  await page
+    .locator(".tasks-panel textarea[id^=check-script-]")
+    .fill('import pathlib, sys\nsys.exit(0 if pathlib.Path("notes").is_dir() else 1)\n');
+  await page.getByRole("button", { name: "Add check" }).click();
+  await page.locator(".tasks-panel .check-script").waitFor(long);
+  if ((await page.locator(".map-leaf.leaf-check").count()) < 2)
+    throw new Error("the new check is not on the map");
+  await shot("12-enforced");
+  await closePanel();
 
   step("the outline layout, dark mode and a phone-sized screen");
   await page.getByRole("button", { name: "Outline" }).click();
   await page.waitForSelector(".outline-row");
-  await shot("10-outline");
+  await shot("13-outline");
   await page.getByRole("button", { name: "Map" }).click();
   await page.emulateMedia({ colorScheme: "dark" });
-  await shot("11-dark");
+  await shot("14-dark");
   await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForSelector(".outline-row");
-  await shot("12-phone");
+  await shot("15-phone");
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
   );
