@@ -7,6 +7,7 @@ import { TurtleDb } from "../db/db.js";
 import type { SandboxMode, TurtleNode } from "../db/types.js";
 import { GitStore } from "../git/store.js";
 import { checkpointOf, OpsError, requestStop } from "../ops.js";
+import { type ScriptSandbox, scriptSandbox } from "../run/script.js";
 import {
   type GraphCallContext,
   queueInstruction,
@@ -21,6 +22,7 @@ import type { RunnerLauncher } from "../run/transport.js";
 import { checkReplyNote, failingChecks, runTaskChecks, type TaskCheckRun } from "./checks.js";
 import { assembleTaskContext, graphText } from "./context.js";
 import type { Project } from "./project.js";
+import { recipeLauncher } from "./recipes.js";
 import { openRunSources } from "./sources.js";
 import type { Actor, Concept, LinkTarget, TaskStatus } from "./types.js";
 import { shortConceptIds } from "./view.js";
@@ -46,6 +48,8 @@ export class TaskRunBinding implements TaskBinding {
     private readonly project: Project,
     readonly taskId: string,
     private readonly primarySource: string,
+    /** Where checks run: the agent's sandbox. */
+    private readonly sandbox?: ScriptSandbox,
   ) {
     this.actor = { type: "agent", id: "pending", onBehalfOf: project.identity.memberId };
   }
@@ -101,6 +105,7 @@ export class TaskRunBinding implements TaskBinding {
     this.lastChecks = await runTaskChecks(this.project, this.taskId, ctx.workspace, {
       checkpointId: node.id,
       actor: this.actor,
+      ...(this.sandbox ? { sandbox: this.sandbox } : {}),
     });
   }
 
@@ -273,6 +278,30 @@ export class TaskRunBinding implements TaskBinding {
           message: `Check ${short(c.id)} proposed. It runs once a human activates it.`,
         };
       }
+      case "recipe": {
+        const title = str("title");
+        if (!title) throw new OpsError("title is required");
+        const params: Record<string, string> = {};
+        if (args.params && typeof args.params === "object")
+          for (const [k, v] of Object.entries(args.params as Record<string, unknown>))
+            params[k] = String(v);
+        const r = await p.addRecipe(
+          {
+            taskId: this.taskId,
+            title,
+            file: str("file"),
+            script: String(args.script ?? ""),
+            params,
+            outputs: Array.isArray(args.outputs) ? (args.outputs as unknown[]).map(String) : [],
+            tolerance: typeof args.tolerance === "number" ? args.tolerance : 0,
+          },
+          this.actor,
+        );
+        return {
+          id: r.id,
+          message: `Recipe ${short(r.id)} recorded. When your run ends, turtle verifies it: it replays the recipe from a clean copy of your latest checkpoint (outputs deleted first) and compares the outputs. Checkpoint the files the recipe needs before you finish.`,
+        };
+      }
       case "lesson": {
         const text = str("text");
         if (!text) throw new OpsError("text is required");
@@ -435,6 +464,10 @@ export async function startTaskRun(
 
   const own = task.branches?.find((b) => b.source === primary.id);
   const ownBranch = own ? db.getBranch(own.branch) : null;
+  const sandboxMode = opts.sandbox ?? deps.config.sandbox.mode;
+  const scripts = scriptSandbox(sandboxMode, deps.config.sandbox.image);
+  // A replay task's first run is its recipe, without a model (architecture §3.7).
+  const replayFirst = !!task.replay && !ownBranch?.headNodeId;
   if (ownBranch?.headNodeId && ownBranch.status !== "running") {
     opts.from = ownBranch.headNodeId;
     const lessons = project.lessonsInScope(task.id);
@@ -444,14 +477,18 @@ export async function startTaskRun(
       .listConcepts({ parentId: task.id, kind: "question" })
       .filter((q) => q.answer && q.answer.at >= lastCp)
       .map((q) => `- ${q.title} → ${q.answer?.text}`);
-    opts.prompt = [
-      o.instruction?.trim() ||
-        (answers.length ? "The human answered your questions:" : "Continue the task."),
-      answers.length ? `\n${answers.join("\n")}` : "",
-      lessons.length
-        ? `\nLessons in force:\n${lessons.map((l) => `- ${(l.body || l.title).replace(/\n+/g, " ")}`).join("\n")}`
-        : "",
-    ].join("");
+    // A branch with no conversation to resume (a recipe replay) gets the full task prompt.
+    const resumable = db.listAgents({ branchId: ownBranch.id }).some((x) => x.sessionId);
+    opts.prompt = !resumable
+      ? assembleTaskContext(project, task.id, o.instruction)
+      : [
+          o.instruction?.trim() ||
+            (answers.length ? "The human answered your questions:" : "Continue the task."),
+          answers.length ? `\n${answers.join("\n")}` : "",
+          lessons.length
+            ? `\nLessons in force:\n${lessons.map((l) => `- ${(l.body || l.title).replace(/\n+/g, " ")}`).join("\n")}`
+            : "",
+        ].join("");
   } else {
     if (task.startFrom) {
       let nodeId = task.startFrom.checkpointId;
@@ -469,10 +506,15 @@ export async function startTaskRun(
       opts.from = nodeId;
       opts.fork = true;
     }
-    opts.prompt = assembleTaskContext(project, task.id, o.instruction);
+    opts.prompt = replayFirst
+      ? `Replay the recipe of this task with ${Object.entries(task.replay?.params ?? {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" ")}.`
+      : assembleTaskContext(project, task.id, o.instruction);
+    if (replayFirst) opts.model = "recipe";
   }
 
-  const binding = new TaskRunBinding(project, task.id, primary.id);
+  const binding = new TaskRunBinding(project, task.id, primary.id, scripts);
   let session: RunSession;
   try {
     session = await RunSession.start(
@@ -480,7 +522,9 @@ export async function startTaskRun(
         store,
         db,
         config: deps.config,
-        launcher: deps.launcherFor(opts.sandbox ?? deps.config.sandbox.mode, deps.config),
+        launcher: replayFirst
+          ? recipeLauncher(project, task.id, scripts)
+          : deps.launcherFor(sandboxMode, deps.config),
         summarizer: deps.summarizer,
         graph: binding,
         ...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}),

@@ -25,6 +25,10 @@ You are working on one task in a shared task graph that a human reads.
   a check with mcp__turtle__check; a human activates it.
 - Checks listed in your task run at every checkpoint; a failing one is reported in
   the checkpoint's reply. Fix the work, not the check.
+- When a step works and could be redone (another model, new data), record how with
+  mcp__turtle__recipe: a script that regenerates its outputs from the files you
+  checkpointed, with parameters as environment variables. turtle verifies it by
+  replaying it from a clean copy of your checkpoint.
 - The user may send you new messages while you work. They are the user's own
   instructions: follow them, and record a decision if they change the plan.`;
 

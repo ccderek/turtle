@@ -12,11 +12,13 @@ import {
   pidFileFor,
   runTaskChecks,
   type SandboxMode,
+  scriptSandbox,
   shortConceptIds,
   startTaskRun,
   stopTask,
   TurtleDb,
   tellTask,
+  verifyRecipe,
 } from "@turtle/core";
 import { CliError } from "../context.js";
 import { c, firstLine, truncate } from "../render.js";
@@ -447,5 +449,73 @@ export async function checkCommand(
       }
     }
     throw new CliError("this task has no workspace yet; start it first");
+  });
+}
+
+/**
+ * Recipes (architecture §3.7, L2): `add` records how to redo a task's step, `verify`
+ * replays it from a clean copy of the task's checkpoint, `replay` creates a task that
+ * redoes the step with other parameters, `list` shows a task's recipes.
+ */
+export async function recipeCommand(
+  cwd: string,
+  action: "add" | "verify" | "replay" | "list",
+  ref: string,
+  o: { script?: string; title?: string; param?: string[]; output?: string[]; tolerance?: string },
+): Promise<string[]> {
+  return withProject(cwd, async (p) => {
+    const short = shortConceptIds(p);
+    const target = p.resolveConcept(ref);
+    const params: Record<string, string> = {};
+    for (const kv of o.param ?? []) {
+      const i = kv.indexOf("=");
+      if (i < 1) throw new CliError(`--param takes NAME=value (got ${kv})`);
+      params[kv.slice(0, i)] = kv.slice(i + 1);
+    }
+    if (action === "add") {
+      if (!o.script) throw new CliError("--script <file> is required");
+      const script = await readFile(o.script, "utf8");
+      const r = await p.addRecipe({
+        taskId: target.id,
+        title: o.title ?? `Redo "${target.title}"`,
+        file: basename(o.script),
+        script,
+        params,
+        outputs: o.output ?? [],
+        tolerance: o.tolerance ? Number(o.tolerance) : 0,
+      });
+      return [
+        `recipe ${c.bold(shortConceptIds(p)(r.id))} added (draft); verify it with: turtle recipe verify ${shortConceptIds(p)(r.id)}`,
+      ];
+    }
+    if (action === "list") {
+      const list = p.recipesOf(target.id);
+      if (!list.length) return ["no recipes for this task"];
+      return list.map(
+        (r) =>
+          `${short(r.id)} ${r.title} ${c.dim(`${r.file} · ${r.recipeState}`)}${
+            r.verification?.problems.length ? `\n    ${r.verification.problems.join("\n    ")}` : ""
+          }`,
+      );
+    }
+    if (target.kind !== "recipe") throw new CliError(`${ref} is not a recipe`);
+    if (action === "verify") {
+      const config = await loadConfig(p.config.sources[0]?.path ?? cwd).catch(() => null);
+      const sandbox = config ? scriptSandbox(config.sandbox.mode, config.sandbox.image) : undefined;
+      const v = await verifyRecipe(p, target.id, sandbox ? { sandbox } : {});
+      return v.ok
+        ? [
+            `${c.green("✓")} recipe ${short(target.id)} verified against checkpoint ${v.checkpointId.slice(0, 6)}`,
+          ]
+        : [
+            `${c.red("✗")} recipe ${short(target.id)} failed:`,
+            ...v.problems.map((x) => `    ${x}`),
+          ];
+    }
+    const t = await p.replayRecipe(target.id, params, o.title ? { title: o.title } : {});
+    const s2 = shortConceptIds(p);
+    return [
+      `replay task ${c.bold(s2(t.id))} "${t.title}" added; start it with: turtle task start ${s2(t.id)}`,
+    ];
   });
 }

@@ -131,8 +131,27 @@ try {
   await page.locator(".cp-row").first().waitFor(long);
   await shot("09-checkpoints");
 
-  step("model B from the environment: a new task that starts from a checkpoint");
+  step("the compile step is hardened: its recipe was verified by a clean replay");
+  await card("Compile model A").locator(".badge", { hasText: "hardened" }).waitFor(long);
   await open("Compile model A");
+  await page.locator(".tasks-panel .recipe-card.state-verified").waitFor(long);
+  await shot("09b-recipe");
+
+  step(
+    "replay it for model B: the recipe fails, an agent fixes only that, the new recipe verifies",
+  );
+  await page.getByRole("button", { name: "Replay with…" }).click();
+  await page.locator(".tasks-panel input[id$=-MODEL]").fill("B");
+  await page.locator(".replay-form button[type=submit]").click();
+  await badge("(MODEL=B)", "done").waitFor({ timeout: 120_000 });
+  await open("(MODEL=B)");
+  await page.locator(".tasks-panel .replay-info.replay-bad").waitFor(long);
+  await page.locator(".tasks-panel .recipe-card.state-verified").waitFor(long);
+  await shot("09c-replay-repaired");
+  await closePanel();
+
+  step("model B from the environment: a new task that starts from a checkpoint");
+  await open(/^Compile model A for the phone$/);
   await page
     .locator(".tasks-panel input[id^=here-]")
     .fill("Compile model B with the new toolchain");

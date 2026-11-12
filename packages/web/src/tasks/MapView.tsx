@@ -3,6 +3,7 @@ import type { Concept } from "../api.js";
 import { checkVerdict } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
 import { countsOf, layoutGoal, type MapNode } from "./map.js";
+import { isHardened } from "./Recipes.js";
 import type { GraphCtx } from "./TasksView.js";
 
 interface Props {
@@ -180,6 +181,7 @@ function MapCard({
   const sub = waiting && c.status === "todo" ? waiting : (c.brief ?? "").split("\n")[0];
   const counts = countsOf(ctx.kids, c.id);
   const verdict = checkVerdict(ctx, c);
+  const hardened = isHardened(ctx, c.id);
   return (
     <div
       className={`map-node map-task tone-${st.tone}${selected ? " selected" : ""}${gone ? " gone" : ""}`}
@@ -204,6 +206,15 @@ function MapCard({
             <span className="badge mono-badge">from {c.startFrom.checkpointId.slice(0, 6)}</span>
           )}
           {isNew && <span className="badge new">new</span>}
+          {c.replay && <span className="badge mono-badge">replay</span>}
+          {hardened && (
+            <span
+              className="badge ok"
+              title="A recipe redoes this step; it was verified by a clean replay"
+            >
+              ⚙ hardened
+            </span>
+          )}
           {verdict && (
             <span
               className={`badge ${verdict.failed ? "bad" : "ok"}`}

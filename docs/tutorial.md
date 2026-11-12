@@ -301,7 +301,7 @@ Stop the UI with Ctrl-C in its terminal.
 
 ---
 
-## Part D — The task graph (offline, about 20 minutes)
+## Part D — The task graph (offline, about 25 minutes)
 
 Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **Tasks** tab shows a seeded example: a friend's trading system. One approach to the investment signal (A, news sentiment) was tried, failed out of sample and was abandoned. Its lesson sits on the *Investment signal* node, and approach B starts from the checkpoint before A. The demo agent works in small steps (about 5 s per task) and calls no model.
 
@@ -331,15 +331,19 @@ Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **
    - *Measure* asks you which sampling rate to use. Answer **10 kHz** in *Needs you*.
 7. **D7. What a task did.**
    - Click *Measure power and performance*. **Outputs** shows the CSV it measured, as a table, and the finding it supports. **Conversation** shows the prompt it got and every step. **Code** lists its checkpoints; click one to see its diff in the Code tab.
-8. **D8. Model B from the environment.**
-   - Click *Compile model A*. Under **New task from here**, type `Compile model B with the new toolchain` and press **Add**. The new task starts from A's latest checkpoint (the `from …` badge), with A's files already there.
+8. **D8. A hardened step, replayed for model B.**
+   - When *Compile model A* is done, its card shows **⚙ hardened**. Open it: under **Recipe**, *Compile a model for the phone* is **verified**. turtle replayed `bash build/compile.sh` from a clean copy of the checkpoint (with the output deleted first) and got the same `build/model-A.bin`. *Measure power and performance* is hardened too, with numbers compared within 3%.
+   - Press **Replay with…**, set `MODEL` to `B`, and press **Replay**. A task *Compile model A for the phone (MODEL=B)* starts. Its first run is the recipe itself, with no model.
+   - It fails: the toolchain cannot lower Conv3D for model B. The task's *Replay* section shows the output, and an agent takes over with only that failure to fix. It changes `build/compile.sh` and records an updated recipe, which is verified in turn. Look at its *Conversation* tab: the first run is one Bash step and no model; the second is the agent.
+9. **D9. Model B from the environment, by hand.**
+   - Click *Compile model A for the phone*. Under **New task from here**, type `Compile model B with the new toolchain` and press **Add**. The new task starts from A's latest checkpoint (the `from …` badge), with A's files already there.
    - Press **Abandon…** on it, write `The new toolchain needs the vendor's NPU driver; check the driver first.`, and press **Abandon and keep the lesson**. The lesson appears on the goal: every later task under it gets it in its prompt.
    - On any task's *Overview*, **+ wait for a task** adds a dependency (turtle refuses one that would make a loop), and × removes it.
-9. **D9. A lesson that is enforced.**
+10. **D10. A lesson that is enforced.**
    - Back in the trading goal, the teal **check** under *Investment signal* is the lesson "keep 6 months out of sample" written as a script (`check_oos.py`). Click it to read the script.
    - turtle ran it at every checkpoint of *Approach B*. Open B, and look at *Activity* and the *Conversation* tab: the first "done" checkpoint failed the check, the agent was told why, added the out-of-sample score and passed. B's card shows **✓ checks**.
-   - Click the lesson you wrote in D8 (the NPU driver), press **Enforce with a check…**, and add the check. Every later task under that goal is judged by it: a task cannot end done while a check fails, and the agent cannot edit the check.
-10. **D10. Undo and the Code tab.**
+   - Click the lesson you wrote in D9 (the NPU driver), press **Enforce with a check…**, and add the check. Every later task under that goal is judged by it: a task cannot end done while a check fails, and the agent cannot edit the check.
+11. **D11. Undo and the Code tab.**
    - Open any task, expand **History** and press **undo** on a change.
    - The *Code* line in a task's panel opens that task's branch in the **Code** tab: the same checkpoints and diffs as Part A.
 
@@ -368,7 +372,7 @@ Mac: (chip, macOS version)   Node: (version)   Auth: subscription token / API ke
 Part A:  A1 [ ]  A2 [ ]  A3 [ ]  A4 [ ]  A5 [ ]  A6 [ ]  A7 [ ]  A8 [ ]
 Part B:  U1 [ ]  U2 [ ]  U3 [ ]  U4 [ ]  U5 [ ]  U6 [ ]   B7 export [ ]   B8 doctor OK [ ]
 Part C:  (skipped / worked / problem)
-Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]  D9 [ ]  D10 [ ]
+Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]  D9 [ ]  D10 [ ]  D11 [ ]
 
 1. Could you keep up with what the agents were doing? Where did you lose track?
 2. What did you look for on screen and not find?

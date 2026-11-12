@@ -227,9 +227,10 @@ On top, not in the core:
 **Checks (L1).**
 - **A concept of kind `check`.** It has a scope (its parent: the check applies to every task under it, like a lesson) and a script with a file name (`check_oos.py`).
   - The script lives **in the graph, not in the agent's workspace**. turtle writes it to a temporary directory and runs it with the task's workspace as the working directory. The agent cannot edit or delete it, and a check cannot be weakened by the work it judges.
+  - It runs **in the agent's sandbox**: on the host for `sandbox: none`, in the runner image with the workspace mounted at `/workspace` for `docker` (the image must have the interpreter, e.g. python3).
   - An `enforces` link points to the lesson it hardens.
-- **The contract is language-neutral.** Exit code 0 passes and anything else fails; the output is the explanation shown to the agent and the human. The interpreter follows the extension (`.py` → python3, `.sh` → bash, `.js`/`.mjs` → node). Python is the default for data and measurement checks.
-- **States.** A member's check is `active` at once. An agent may only **propose** one (`proposed`): it does not run until a member activates it, because an active check runs on the member's machine outside the sandbox. `retired` checks stop running.
+- **The contract is language-neutral.** Exit code 0 passes and anything else fails; the output is the explanation shown to the agent and the human. The interpreter follows the extension (`.py` → python3, `.sh` → bash, `.js`/`.mjs` → node). Python is the default for data and measurement checks, and every script can `from turtle_check import *`: `read_csv`, `column`, `mean`, `within(actual, expected, rel=0.03)`, `expect`, `expect_within`, `param`, `done()`.
+- **States.** A member's check is `active` at once. An agent may only **propose** one (`proposed`): it does not run until a member activates it, because a check is an acceptance condition that a person sets, not the agent being judged. `retired` checks stop running.
 - **Enforcement.**
   - Every active check in scope runs at each semantic checkpoint of a task.
   - A failure is written into the checkpoint's reply, so the agent can fix the work in the same run.
@@ -240,10 +241,12 @@ On top, not in the core:
   - Measurements of the outside world (a phone's power, market data) need tolerances, not equality.
   - Checks run with the member's permissions, with a timeout, and without the agent's credentials in the environment.
 
-**Recipes (L2), next step.**
-- **Harden a checkpoint.** An agent (`turtle_harden`) writes the recipe and its checks. turtle then **verifies** it: it replays the recipe in a clean workspace from the parent checkpoint and compares the outputs with the recorded ones (hash, or values within a tolerance). Only a verified recipe marks the checkpoint `hardened`.
-- **Replay from here, with parameters.** turtle runs the chain of recipes and calls an agent only for the step that fails. For "Model B", only the compile step needs an agent, and the rest is the same as for A, so the measurements compare.
-- **When to harden.** Not every step is worth it; exploration stays free. Hardening is offered when a checkpoint is reused (a fork, "new task from here", a retry) or a member marks it "keep".
+**Recipes (L2).**
+- **A concept of kind `recipe`** under a task: a script (stored in the graph, like a check), **parameters** with defaults (environment variables, e.g. `MODEL=A`), the **outputs** it regenerates (paths, which may use `${MODEL}`), and a **tolerance** for numbers in CSV/TSV outputs. An agent records one with `turtle_recipe`; a member can write one too.
+- **Verification by a clean replay.** turtle materializes the task's latest checkpoint in a fresh directory, deletes the outputs, runs the recipe with its defaults in the agent's sandbox, compares each regenerated output with the checkpoint's version (equal bytes, or CSV numbers within the tolerance), and runs the checks in scope. Only then is the recipe `verified` and the task **hardened**. In `turtle ui` this happens on its own when the run that recorded the recipe ends.
+- **Replay with parameters.** "Replay with…" on a verified recipe creates a task that starts from the verified checkpoint. Its first run is the recipe itself, run by turtle with no model: if it works, the task is done at no token cost. If it fails, the task is blocked with the output, and an agent takes over (once, automatically with auto-start) with the task prompt, the recipe and the failure, and is told to fix only what fails and record the updated recipe, which is verified in turn. For "Model B", only the compile step needs an agent; the rest is the same as for A, so the measurements compare.
+- **Limits.** Single-source projects only for now (a multi-source checkpoint is a set of commits). A recipe proves that the outputs follow from the checkpoint's files, not that those files are right; checks and review still matter. A recipe that calls hardware (a phone over USB) needs `sandbox: none`.
+- **When to harden.** Not every step is worth it; exploration stays free. Agents are asked to record a recipe when a step could be redone (another model, new data).
 
 **What this changes.** Checkpoints keep their exact rewind. Hardened checkpoints add a reproducible replay. Lessons become guarantees where they can be checked and stay advice where they cannot. Replays that reuse recipes spend tokens only on what is new (G4).
 
@@ -744,7 +747,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D28 | Failed approaches | Abandon, do not delete; turtle drafts a lesson, the human edits it; the lesson hangs on the node rewound to; the retry is a sibling task forked from a checkpoint before the failure and receives the lessons, audited against them |
 | D29 | Irreversible resources | Resources can require confirmation (`confirm: always`); agents stop and ask before using them |
 | D30 | Memory | The task graph is the memory: lessons, findings, decisions with provenance and scope; retrieval by scope (Phase 2), project search over a rebuildable index (Phase 3), shared across projects later (Phase 5) |
-| D31 | Hardening | Intent that worked and lessons that must hold become code turtle runs: L1 checks (scripts stored in the graph, run at every checkpoint in scope, a failing check blocks `done`; agents only propose), L2 recipes verified by a clean replay (next), L3 policies (D29). Language-neutral contract: exit code 0 passes; Python by default |
+| D31 | Hardening | Intent that worked and lessons that must hold become code turtle runs, in the agent's sandbox: L1 checks (scripts stored in the graph, run at every checkpoint in scope, a failing check blocks `done`; agents only propose), L2 recipes (verified by a clean replay from the checkpoint; replays with parameters run without a model, and an agent repairs only what fails), L3 policies (D29). Language-neutral contract: exit code 0 passes; Python by default, with `turtle_check` helpers for tolerances |
 
 ## 17. TODO
 

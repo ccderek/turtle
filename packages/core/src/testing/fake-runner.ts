@@ -37,7 +37,8 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
  * Claude Agent SDK shapes the orchestrator reads.
  */
 export class FakeAgent {
-  readonly sessionId: string;
+  /** Null for a sessionless runner: nothing to resume, so a later run starts fresh. */
+  readonly sessionId: string | null;
   interrupted = false;
   /** Instructions delivered by the orchestrator at tool boundaries or on stop. */
   readonly instructions: string[] = [];
@@ -55,8 +56,13 @@ export class FakeAgent {
     readonly prompt: string,
     readonly options: RunnerStartOptions,
     readonly model = "claude-opus-5-5",
+    private readonly mode: { sessionless?: boolean; free?: boolean } = {},
   ) {
-    this.sessionId = options.resume && !options.forkSession ? options.resume : randomUUID();
+    this.sessionId = mode.sessionless
+      ? null
+      : options.resume && !options.forkSession
+        ? options.resume
+        : randomUUID();
   }
 
   get workspace(): string {
@@ -103,7 +109,12 @@ export class FakeAgent {
     const uuid = randomUUID();
     this.side.send({
       t: "sdk",
-      msg: { uuid, session_id: this.sessionId, parent_tool_use_id: null, ...msg },
+      msg: {
+        uuid,
+        ...(this.sessionId ? { session_id: this.sessionId } : {}),
+        parent_tool_use_id: null,
+        ...msg,
+      },
     });
     return uuid;
   }
@@ -112,7 +123,7 @@ export class FakeAgent {
     if (this.interrupted) throw new FakeInterrupted();
   }
 
-  private assistant(content: unknown[], usage = { input_tokens: 100, output_tokens: 20 }): string {
+  private assistant(content: unknown[], usage = this.usage()): string {
     return this.sdk({
       type: "assistant",
       message: { id: `msg_${++this.msgSeq}`, role: "assistant", model: this.model, content, usage },
@@ -275,13 +286,19 @@ export class FakeAgent {
     await this.request<HookReply>(req);
   }
 
+  private usage() {
+    return this.mode.free
+      ? { input_tokens: 0, output_tokens: 0 }
+      : { input_tokens: 100, output_tokens: 20 };
+  }
+
   result(subtype: string): void {
     this.sdk({
       type: "result",
       subtype,
       is_error: subtype !== "success",
       num_turns: this.msgSeq,
-      total_cost_usd: this.msgSeq * 0.01,
+      total_cost_usd: this.mode.free ? 0 : this.msgSeq * 0.01,
       usage: {},
       modelUsage: {},
     });
@@ -297,6 +314,12 @@ export interface FakeLauncherOptions {
   onAgent?: (agent: FakeAgent) => void;
   /** Exit without sending `exit` (simulates a crash). */
   crash?: boolean;
+  /** No conversation to resume (a scripted, non-model runner such as a recipe replay). */
+  sessionless?: boolean;
+  /** Reports no tokens and no cost. */
+  free?: boolean;
+  /** Model name shown for the run. */
+  model?: string;
 }
 
 /** A RunnerLauncher whose runner executes `script` in-process. */
@@ -307,7 +330,10 @@ export function fakeLauncher(script: FakeScript, opts: FakeLauncherOptions = {})
     const execHandler = opts.exec ?? (() => 0);
     runner.onMessage((msg) => {
       if (msg.t === "start") {
-        agent = new FakeAgent(runner, spec, msg.prompt, msg.options);
+        agent = new FakeAgent(runner, spec, msg.prompt, msg.options, opts.model, {
+          ...(opts.sessionless ? { sessionless: true } : {}),
+          ...(opts.free ? { free: true } : {}),
+        });
         opts.onAgent?.(agent);
         void run(agent);
       } else {

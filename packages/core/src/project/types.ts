@@ -8,7 +8,8 @@ export type ConceptKind =
   | "question"
   | "output"
   | "lesson"
-  | "check";
+  | "check"
+  | "recipe";
 
 export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "goal",
@@ -19,6 +20,7 @@ export const CONCEPT_KINDS: readonly ConceptKind[] = [
   "output",
   "lesson",
   "check",
+  "recipe",
 ];
 
 export type TaskStatus =
@@ -75,11 +77,43 @@ export interface ConceptFields {
   checkState?: "proposed" | "active" | "retired";
   // task: the latest result of each check in scope, by check id
   checkResults?: Record<string, CheckResult>;
+  // recipe: how to redo its task's step (D31 L2); also uses file and script
+  /** Parameters and their defaults, passed as environment variables. */
+  params?: Record<string, string>;
+  /** Files the recipe regenerates (may use \${PARAM}); compared when verifying. */
+  outputs?: string[];
+  /** Relative tolerance for numbers in CSV outputs (0 = exact). */
+  tolerance?: number;
+  recipeState?: "draft" | "verifying" | "verified" | "failed";
+  verification?: RecipeVerification | null;
+  // task: a replay of a recipe with parameters (runs the recipe before any agent)
+  replay?: ReplaySpec | null;
   // ordering among siblings
   order?: string;
 }
 
 export type ConceptField = Exclude<keyof ConceptFields, "kind">;
+
+/** The last clean replay of a recipe (architecture §3.7). */
+export interface RecipeVerification {
+  ok: boolean;
+  at: string;
+  /** The checkpoint it was replayed from and compared with. */
+  checkpointId: string;
+  output: string;
+  /** Output files that did not match, and failing checks. */
+  problems: string[];
+  ms: number;
+}
+
+export interface ReplaySpec {
+  recipeId: string;
+  params: Record<string, string>;
+  /** Result of the recipe run, when it ran. */
+  result?: { ok: boolean; output: string; at: string } | null;
+  /** Agent repairs started after a failed replay. */
+  repairs?: number;
+}
 
 /** One run of a check against a task's workspace (architecture §3.7). */
 export interface CheckResult {

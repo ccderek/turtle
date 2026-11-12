@@ -96,6 +96,7 @@ export type GraphOp =
   | "brief"
   | "lesson"
   | "check"
+  | "recipe"
   | "read";
 
 export interface GraphRequest {

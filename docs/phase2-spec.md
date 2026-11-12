@@ -335,15 +335,28 @@ A lesson in the prompt is advice. A **check** is a script turtle runs, so a less
 | Part | As built |
 |---|---|
 | **Concept** | Kind `check`, with `file` (`check_oos.py`: the extension picks python3, bash or node), `script`, and `checkState` (`proposed`, `active` or `retired`). Its parent is its scope: every task under it is judged. A check made on a lesson goes on the lesson's node and links to the lesson with `enforces` |
-| **Where it runs** | `runCheck` (core `project/checks.ts`) writes the script to a fresh temporary directory, outside the workspace, and runs it with the task's working directory as cwd. It has a 60 s timeout, its output is clipped to 4 KB, and environment variables that look like credentials are removed. Exit code 0 passes. The agent cannot edit or delete a check: it lives in the graph |
+| **Where it runs** | `runScript` (core `run/script.ts`) writes the script and the `turtle_check.py` helpers to a fresh temporary directory, outside the workspace, and runs it with the task's working directory as cwd, **in the agent's sandbox**: on the host (`none`, environment variables that look like credentials removed) or in the runner image (`docker run --rm --user … -v <workspace>:/workspace -v <script dir>:/turtle-script:ro`). Checks have a 60 s timeout; output is clipped to 4 KB. Exit code 0 passes. The agent cannot edit or delete a check: it lives in the graph |
 | **When** | At every semantic checkpoint of a task (declared or automatic, except killed or failed ones), every active check in scope runs, and the results go on the task (`checkResults`, per check: ok, output, checkpoint, time). **Run checks now** in the panel (`POST /api/tasks/:id/checks`, or `turtle check run`) runs them in the task's workspace when it is not running |
 | **Enforcement** | The checkpoint's reply lists the failures ("1 of 1 check(s) FAILED … fix the work and checkpoint again"), so the agent can fix the work in the same run. A run that ends `done` while a check fails on its last checkpoint leaves the task `blocked`, which puts it in *Needs you*. Activity reports "checks on X: n failed" |
 | **Prompt** | The task prompt has a "Checks that must pass" section with each script (clipped) and whether it passed last time; the system prompt says to fix the work, not the check |
-| **Who** | A member's check is active at once (UI: **Enforce with a check…** on a lesson, **Add a check…** on a task; `POST /api/checks`; `turtle check add <lesson|task|goal> --script <file>`). An agent proposes one with `mcp__turtle__check` (on its task, or on a lesson in its scope); it waits in *Needs you* as "Check to activate" and runs only after a member activates it, because it runs outside the sandbox |
+| **Who** | A member's check is active at once (UI: **Enforce with a check…** on a lesson, **Add a check…** on a task; `POST /api/checks`; `turtle check add <lesson|task|goal> --script <file>`). An agent proposes one with `mcp__turtle__check` (on its task, or on a lesson in its scope); it waits in *Needs you* as "Check to activate" and runs only after a member activates it: acceptance conditions are set by people |
 | **UI** | Checks are nodes on the map (teal, right after lessons). A task card shows "✓ checks" or "✗ n checks". The task panel's *Checks* section shows each result with its output. The check panel shows the script, Activate / Retire / Edit, and results per task |
 | **Demo** | The seeded lesson "keep 6 months out of sample" has `check_oos.py`. Approach B's first done checkpoint fails it; the demo agent reads the reply, adds the out-of-sample score, checkpoints again and passes |
 
-Not built yet (architecture §3.7): recipes (L2) verified by a clean replay, "replay from here with parameters", tolerances as a helper library, checks that run inside the docker sandbox.
+**Helpers.** Every script can `from turtle_check import *`: `read_csv(path)`, `column(rows, name)`, `mean(xs)`, `within(actual, expected, rel=0.03, abs_tol=0)`, `expect(cond, msg)`, `expect_within(actual, expected, rel, what=)`, `param(name)`, `done()` (exit 1 with the problems, or 0).
+
+### 11.3 Recipes and replay (M7.6, architecture §3.7 L2)
+
+| Part | As built |
+|---|---|
+| **Concept** | Kind `recipe`, under its task: `file`, `script`, `params` (defaults, upper-case names, passed as environment variables), `outputs` (paths, `${NAME}` expanded), `tolerance` (relative, for numbers in .csv/.tsv), `recipeState` (`draft`, `verifying`, `verified`, `failed`) and `verification` (ok, checkpoint, output, problems, time) |
+| **Recording** | Agents: `mcp__turtle__recipe` (the system prompt asks for one when a step could be redone). Members: **Add a recipe…** in the task panel, `POST /api/recipes`, `turtle recipe add <task> --script … --param MODEL=A --output 'build/model-${MODEL}.bin' [--tolerance 0.03]` |
+| **Verification** | `verifyRecipe` (core `project/recipes.ts`): materialize the task's latest checkpoint in a temporary directory, delete the outputs, run the recipe with its defaults (30 min timeout, agent's sandbox), compare outputs (`compareOutput`: equal bytes, or same table shape with equal text and numbers within the tolerance), run the checks in scope. `turtle ui` verifies draft recipes when the run that recorded them ends; **Verify** / `POST /api/recipes/:id/verify` / `turtle recipe verify` do it on demand. A verified recipe marks its task **⚙ hardened** on the map |
+| **Replay** | **Replay with…** / `POST /api/recipes/:id/replay {params}` / `turtle recipe replay <recipe> --param MODEL=B` creates a sibling task "<task> (MODEL=B)" with `startFrom` = the verified checkpoint and `replay` = {recipe, params}. Its first run uses `recipeLauncher`: a scripted runner (no model, no session, no cost) that deletes the outputs, runs the recipe in the forked workspace, records the command and its output as a Bash step, and checkpoints `done` or `blocked`. Checks in scope run at that checkpoint as usual |
+| **Repair** | When the recipe fails and auto-start is on, the task runs once more with the real agent (`replay.repairs` counts it). The branch has no conversation to resume, so the agent gets the full task prompt with a "## Replay" section: the parameters, the recipe, and the failure output, and the instruction to fix only what fails and record the updated recipe. That recipe is verified when the run ends. With auto-start off, **Continue** does the same |
+| **Demo** | In the phone scenario, *Compile model A* and *Measure power and performance* record recipes (`compile.sh`, exact; `measure.py`, 3% tolerance over 1% noise) and both verify. **Replay with… MODEL=B** fails ("cannot lower Conv3D"), the demo agent changes only `build/compile.sh`, and the new recipe verifies |
+
+Not built yet: recipes in multi-source projects; replaying a chain of recipes (compile → measure) as one action; comparing a replay's outputs with the original's (e.g. power of B vs A) as a check.
 
 ## 12. UI
 
@@ -380,6 +393,9 @@ Live updates use the Phase 1 SSE `change` channel; the task view refetches the g
 | `POST /api/tasks/:id/from-here` | A sibling task that starts from this task's latest checkpoint |
 | `POST /api/checks` | A check (`on`: a lesson, task or goal; `title`, `file`, `script`), active at once |
 | `POST /api/tasks/:id/checks` | Run the task's checks now in its workspace |
+| `POST /api/recipes` | A recipe for a task (`taskId`, `title`, `file`, `script`, `params`, `outputs`, `tolerance`) |
+| `POST /api/recipes/:id/verify` | Verify by a clean replay, in the background |
+| `POST /api/recipes/:id/replay` | A replay task with other parameters (`params`, `title`) |
 | `POST /api/nodes-retry/:id` | Try another way: a task under `:id` from its checkpoint before the first abandoned child |
 | `GET /api/outputs/:id` | An output's content: the workspace, else the newest checkpoint holding the cited version |
 | `GET /api/activity` · `POST /api/scheduler` | Activity feed; the auto-start toggle |
@@ -403,6 +419,8 @@ turtle tell <task> "<instruction>"
 turtle answer <question> "<text>"
 turtle check add <lesson|task|goal> --script check_oos.py [--title]   # active at once
 turtle check run|list <task> · turtle check activate|retire <check>
+turtle recipe add <task> --script compile.sh --param MODEL=A --output 'build/model-${MODEL}.bin' [--tolerance 0.03]
+turtle recipe verify <recipe> · turtle recipe replay <recipe> --param MODEL=B · turtle recipe list <task>
 turtle export <task|goal> [-o file.html]
 turtle undo <op>
 turtle stats --gate                        # G1–G4 (§15)
@@ -455,6 +473,7 @@ turtle stats --gate                        # G1–G4 (§15)
 | M6 | Scheduler + caps + notifications (dependency start, "waiting for …" and auto-start already built with M5) | Budget cap, batched Activity, a daemon-free restart story |
 | M7 | Mind map UI: tidy tree, dependency arrows, conversation/outputs/code tabs, new task from here, dependency picker | **Done**: `pnpm ui:smoke` drives the trading and phone scenarios end to end |
 | M7.5 | Checks: lessons hardened into scripts, enforced at checkpoints (architecture §3.7) | **Done**: the trading demo's check fails, the agent fixes it, B passes; `pnpm ui:smoke` covers it |
+| M7.6 | Recipes verified by a clean replay; replay with parameters without a model; agent repair of a failed replay; scripts in the agent's sandbox; `turtle_check` helpers | **Done**: the phone demo's MODEL=B replay fails, is repaired and verifies; `pnpm ui:smoke` covers it |
 | M8 | Export (+ `--check`), `stats --gate`, `e2e:rewind`, docs + tutorial update | Gate report on the demo; tutorial Part D (task graph) |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 

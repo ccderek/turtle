@@ -459,6 +459,13 @@ function OutlineRow({
         {lessonState && lessonState !== "confirmed" && (
           <span className="badge ask">{lessonState}</span>
         )}
+        {c.kind === "recipe" && (
+          <span
+            className={`badge ${c.recipeState === "verified" ? "ok" : c.recipeState === "failed" ? "bad" : "mute"}`}
+          >
+            {c.recipeState}
+          </span>
+        )}
         {c.kind === "check" && c.checkState !== "active" && (
           <span className={`badge ${c.checkState === "proposed" ? "ask" : "mute"}`}>
             {c.checkState}

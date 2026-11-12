@@ -108,7 +108,15 @@ const SET_FIELDS: readonly ConceptField[] = [
   "script",
   "checkState",
   "checkResults",
+  "params",
+  "outputs",
+  "tolerance",
+  "recipeState",
+  "verification",
+  "replay",
 ];
+
+const PARAM_NAME = /^[A-Z_][A-Z0-9_]{0,40}$/;
 
 /** Check scripts: a plain file name whose extension picks the interpreter (D31). */
 export const CHECK_FILE = /^[\w.-]{1,80}\.(py|sh|js|mjs)$/;
@@ -492,6 +500,85 @@ export class Project {
     return c;
   }
 
+  /**
+   * A recipe for a task (architecture §3.7, L2): a script that regenerates the task's
+   * outputs from its checkpoint. It starts as a draft; `verifyRecipe` replays it.
+   */
+  async addRecipe(
+    o: {
+      taskId: string;
+      title: string;
+      file: string;
+      script: string;
+      params?: Record<string, string>;
+      outputs?: string[];
+      tolerance?: number;
+      body?: string;
+    },
+    actor: Actor = this.me,
+  ): Promise<Concept> {
+    const task = this.requireConcept(o.taskId);
+    if (task.kind !== "task") throw new OpsError(`${o.taskId} is not a task`);
+    return this.createConcept(
+      {
+        kind: "recipe",
+        parentId: task.id,
+        title: o.title.trim(),
+        ...(o.body ? { body: o.body } : {}),
+        file: o.file.trim(),
+        script: o.script,
+        params: o.params ?? {},
+        outputs: o.outputs ?? [],
+        tolerance: o.tolerance ?? 0,
+        recipeState: "draft",
+      },
+      actor,
+    );
+  }
+
+  /** Recipes of a task, newest first. */
+  recipesOf(taskId: string): Concept[] {
+    return this.db
+      .listConcepts({ parentId: taskId, kind: "recipe" })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * A task that redoes a verified recipe's step with other parameters ("Model B"). It
+   * starts from the checkpoint the recipe was verified on; turtle runs the recipe first
+   * and calls an agent only if it fails.
+   */
+  async replayRecipe(
+    recipeId: string,
+    params: Record<string, string>,
+    o: { title?: string; actor?: Actor } = {},
+  ): Promise<Concept> {
+    const r = this.requireConcept(recipeId);
+    if (r.kind !== "recipe") throw new OpsError(`${recipeId} is not a recipe`);
+    if (this.config.sources.length > 1)
+      throw new OpsError("recipes are not supported yet in projects with several sources");
+    if (r.recipeState !== "verified" || !r.verification?.ok)
+      throw new OpsError("only a verified recipe can be replayed; verify it first");
+    const task = this.requireConcept(r.parentId as string);
+    const merged = { ...(r.params ?? {}), ...params };
+    this.checkParams(merged);
+    const changed = Object.entries(params)
+      .filter(([k, v]) => r.params?.[k] !== v)
+      .map(([k, v]) => `${k}=${v}`);
+    return this.createConcept(
+      {
+        kind: "task",
+        parentId: task.parentId,
+        title: o.title?.trim() || `${task.title} (${changed.join(", ") || "replay"})`,
+        body: `Replay of "${task.title}" with its recipe "${r.title}".`,
+        assignee: { type: "agent" },
+        startFrom: { taskId: task.id, checkpointId: r.verification.checkpointId },
+        replay: { recipeId, params: merged },
+      },
+      o.actor ?? this.me,
+    );
+  }
+
   /** Lessons that apply to a concept: those on it and on every ancestor, nearest first. */
   lessonsInScope(id: string): Concept[] {
     const out: Concept[] = [];
@@ -556,7 +643,26 @@ export class Project {
       const t = this.db.getConcept(d);
       if (t?.kind !== "task") throw new OpsError(`dependency ${d} is not a task`);
     }
-    if (f.kind === "check") this.checkScript(f.file, f.script);
+    if (f.kind === "check" || f.kind === "recipe") this.checkScript(f.file, f.script);
+    if (f.kind === "recipe") this.checkRecipe(f);
+  }
+
+  private checkParams(params: Record<string, string>): void {
+    for (const [k, v] of Object.entries(params)) {
+      if (!PARAM_NAME.test(k))
+        throw new OpsError(`parameter names are upper case, like MODEL or RATE (got ${k})`);
+      if (typeof v !== "string" || v.length > 200)
+        throw new OpsError(`parameter ${k} must be a short string`);
+    }
+  }
+
+  private checkRecipe(f: Partial<ConceptFields>): void {
+    this.checkParams(f.params ?? {});
+    for (const out of f.outputs ?? [])
+      if (!out || out.startsWith("/") || out.split("/").includes(".."))
+        throw new OpsError(`outputs are paths inside the workspace (got ${out})`);
+    if (f.tolerance !== undefined && !(f.tolerance >= 0 && f.tolerance < 1))
+      throw new OpsError("tolerance is a fraction between 0 and 1 (0.03 = 3%)");
   }
 
   private checkScript(file: string | undefined, script: string | undefined): void {

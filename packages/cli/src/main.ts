@@ -7,6 +7,7 @@ import {
   goalCommand,
   graphCommand,
   lessonCommand,
+  recipeCommand,
   type TaskStartOptions,
   taskAbandonCommand,
   taskAddCommand,
@@ -214,6 +215,35 @@ program
       throw new Error(`unknown action: ${action}`);
     print(await checkCommand(cwd(), action as "add", ref, o));
   });
+
+const collect = (v: string, prev: string[] = []) => [...prev, v];
+program
+  .command("recipe")
+  .description("recipes (redo a step without a model): add | verify | replay | list")
+  .argument("<action>", "add | verify | replay | list")
+  .argument("<concept>", "add/list: the task; verify/replay: the recipe")
+  .option("-s, --script <file>", "add: the recipe script (.py, .sh, .js or .mjs)")
+  .option("-t, --title <text>", "add: what it redoes; replay: the new task's title")
+  .option("-p, --param <NAME=value>", "add: a parameter and its default; replay: a value", collect)
+  .option("-o, --output <path>", "add: a file it regenerates (may use $" + "{NAME})", collect)
+  .option("--tolerance <fraction>", "add: relative tolerance for numbers in CSV outputs")
+  .action(
+    async (
+      action: string,
+      ref: string,
+      o: {
+        script?: string;
+        title?: string;
+        param?: string[];
+        output?: string[];
+        tolerance?: string;
+      },
+    ) => {
+      if (!["add", "verify", "replay", "list"].includes(action))
+        throw new Error(`unknown action: ${action}`);
+      print(await recipeCommand(cwd(), action as "add", ref, o));
+    },
+  );
 
 program
   .command("answer")

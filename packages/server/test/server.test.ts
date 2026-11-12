@@ -695,4 +695,80 @@ describe("turtle ui server", () => {
     expect(now.body.results).toMatchObject([{ checkId: check.body.id, ok: true }]);
     t.project?.close();
   });
+
+  it("verifies a recipe when its run ends, replays it without a model, and lets an agent repair a failed replay", async () => {
+    const t = await setup({ project: true, autoStart: true });
+    const compileSh =
+      'set -e\nmkdir -p build\ncase "$MODEL" in A) ;; *) echo "cannot lower Conv3D for $MODEL" >&2; exit 2 ;; esac\nprintf "model=%s\\n" "$MODEL" > "build/model-$MODEL.bin"\n';
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a recipe output pattern, expanded by turtle.
+    const out = "build/model-${MODEL}.bin";
+    t.scripts.push(async (a) => {
+      await a.writeFile("build/compile.sh", compileSh);
+      await a.writeFile("build/model-A.bin", "model=A\n");
+      await a.checkpoint("Compiled A", "done");
+      await a.graph("recipe", {
+        title: "Compile",
+        file: "compile.sh",
+        script: "bash build/compile.sh\n",
+        params: { MODEL: "A" },
+        outputs: [out],
+      });
+      await a.finish();
+    });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "Phone", plan: false },
+      })
+    ).body.goal;
+    const compile = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Compile", assignee: { type: "agent" } },
+      })
+    ).body;
+    const graph = async () => (await t.api<GraphResponse>("/api/graph")).body.concepts;
+    const recipe = await t.waitFor(async () =>
+      (await graph()).find((c) => c.kind === "recipe" && c.recipeState === "verified"),
+    );
+    expect(recipe.parentId).toBe(compile.id);
+
+    // The repair agent's script (the replay itself runs no agent).
+    t.scripts.push(async (a) => {
+      expect(a.prompt).toContain("It FAILED");
+      await a.edit("build/compile.sh", compileSh.replace("A) ;;", "A|B) ;;"));
+      await a.writeFile("build/model-B.bin", "model=B\n");
+      await a.checkpoint("Compiled B", "done");
+      await a.graph("recipe", {
+        title: "Compile",
+        file: "compile.sh",
+        script: "bash build/compile.sh\n",
+        params: { MODEL: "B" },
+        outputs: [out],
+      });
+      await a.finish();
+    });
+    const replay = await t.api<Concept>(`/api/recipes/${recipe.id}/replay`, {
+      method: "POST",
+      body: { params: { MODEL: "B" } },
+    });
+    expect(replay.body).toMatchObject({
+      title: "Compile (MODEL=B)",
+      replay: { params: { MODEL: "B" } },
+    });
+    const done = await t.waitFor(async () =>
+      (await graph()).find((c) => c.id === replay.body.id && c.status === "done"),
+    );
+    expect(done.replay).toMatchObject({ repairs: 1, result: { ok: false } });
+    await t.waitFor(async () =>
+      (await graph()).find(
+        (c) => c.kind === "recipe" && c.parentId === replay.body.id && c.recipeState === "verified",
+      ),
+    );
+    const act = (await t.api<{ text: string }[]>("/api/activity")).body;
+    expect(act.some((x) => x.text.startsWith('the recipe failed for "Compile (MODEL=B)"'))).toBe(
+      true,
+    );
+    t.project?.close();
+  });
 });

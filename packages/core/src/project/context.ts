@@ -1,4 +1,5 @@
 import type { Project } from "./project.js";
+import { replayContext } from "./recipes.js";
 import type { Concept } from "./types.js";
 import { shortConceptIds } from "./view.js";
 
@@ -77,6 +78,8 @@ export function assembleTaskContext(p: Project, taskId: string, instruction?: st
   const goal = chain.find((c) => c.kind === "goal");
   const parts: string[] = [`# Your task: ${task.title}`];
   if (task.body) parts.push(task.body.trim());
+  const replay = replayContext(p, task);
+  if (replay) parts.push(replay);
   if (goal) parts.push(`## Goal\n${goal.title}${goal.body ? `\n${clip(goal.body, 800)}` : ""}`);
   const path = chain.filter((c) => c.kind === "task").reverse();
   if (path.length)

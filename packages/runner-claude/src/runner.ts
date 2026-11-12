@@ -382,6 +382,32 @@ export class ClaudeRunner {
         async (args) => call("check", args),
       ),
       tool(
+        "recipe",
+        "Record how to redo your task's step: a script that regenerates its output files from the files in your working directory, with parameters as environment variables (e.g. MODEL=A). When your run ends, turtle verifies it by replaying it from a clean copy of your latest checkpoint; a verified recipe lets the step be replayed with other parameters without a model.",
+        {
+          title: z.string().describe("What the recipe redoes, in one line."),
+          file: z.string().describe("File name: .py (python3), .sh (bash), .js or .mjs (node)."),
+          script: z
+            .string()
+            .describe(
+              "The script. It runs with the working directory as cwd and may call scripts you checkpointed. Exit 0 on success.",
+            ),
+          params: z
+            .record(z.string(), z.string())
+            .optional()
+            .describe('Parameters and their defaults, e.g. {"MODEL": "A"}.'),
+          outputs: z.array(z.string()).optional().describe(
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: a pattern turtle expands, shown to the model.
+            "Files it regenerates (may use ${MODEL}); they are compared when verifying.",
+          ),
+          tolerance: z
+            .number()
+            .optional()
+            .describe("Relative tolerance for numbers in CSV outputs, e.g. 0.03 for measurements."),
+        },
+        async (args) => call("recipe", args),
+      ),
+      tool(
         "graph",
         "Show the task graph around your task: your task, siblings, what you depend on, decisions and the lessons you must follow.",
         { scope: z.enum(["task", "goal"]).optional() },

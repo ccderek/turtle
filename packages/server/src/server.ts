@@ -19,6 +19,7 @@ import {
   runTaskChecks,
   type SandboxMode,
   type Summarizer,
+  scriptSandbox,
   stepNodeIds,
   type TurtleConfig,
   type TurtleDb,
@@ -315,6 +316,7 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       project.config.sources.length > 1 ? dirname(branch.workspacePath) : branch.workspacePath;
     const runs = await runTaskChecks(project, taskId, cwd, {
       checkpointId: branch.headNodeId,
+      sandbox: scriptSandbox(config.sandbox.mode, config.sandbox.image),
     });
     return {
       results: runs.map((r) => ({ checkId: r.check.id, title: r.check.title, ...r.result })),

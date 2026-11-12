@@ -13,6 +13,7 @@ const ORDER: Record<string, number> = {
   decision: 3,
   finding: 4,
   output: 5,
+  recipe: 5.5,
   task: 6,
   goal: 7,
 };

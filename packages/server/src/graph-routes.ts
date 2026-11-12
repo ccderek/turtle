@@ -93,6 +93,7 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
           output: "produced",
           lesson: "added a lesson:",
           check: "added a check:",
+          recipe: "recorded a recipe:",
         };
         text = `${verb[c.fields.kind] ?? "added"} ${c.fields.kind === "output" ? (c.fields.path ?? c.fields.title) : `"${c.fields.title}"`}`;
       } else if (c.kind === "set") {
@@ -102,6 +103,16 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
         else if (c.fields.answer) text = `answered "${title(c.id)}": ${c.fields.answer.text}`;
         else if (c.fields.lessonState) text = `lesson "${title(c.id)}" → ${c.fields.lessonState}`;
         else if (c.fields.checkState) text = `check "${title(c.id)}" → ${c.fields.checkState}`;
+        else if (c.fields.recipeState && c.fields.recipeState !== "verifying")
+          text = `recipe "${title(c.id)}" → ${c.fields.recipeState}${
+            c.fields.recipeState === "failed" && c.fields.verification?.problems?.[0]
+              ? `: ${c.fields.verification.problems[0]}`
+              : ""
+          }`;
+        else if (c.fields.replay?.result)
+          text = c.fields.replay.result.ok
+            ? `replayed the recipe for "${title(c.id)}" (no model)`
+            : `the recipe failed for "${title(c.id)}"`;
         else if (c.fields.checkResults) {
           const failed = Object.entries(c.fields.checkResults).filter(([, r]) => !r.ok);
           text = failed.length
@@ -197,6 +208,45 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
 
     async post(parts: string[], body: Record<string, unknown>): Promise<unknown> {
       const [, a, b, c] = parts;
+      if (a === "recipes" && !b) {
+        const taskId = String(body.taskId ?? "");
+        const title = String(body.title ?? "").trim();
+        if (!taskId || !title) throw new RouteError(400, "taskId and title are required");
+        const params: Record<string, string> = {};
+        if (body.params && typeof body.params === "object")
+          for (const [k, v] of Object.entries(body.params as Record<string, unknown>))
+            params[k] = String(v);
+        return project.addRecipe({
+          taskId: task(taskId).id,
+          title,
+          file: String(body.file ?? ""),
+          script: String(body.script ?? ""),
+          params,
+          outputs: Array.isArray(body.outputs) ? body.outputs.map(String) : [],
+          tolerance: typeof body.tolerance === "number" ? body.tolerance : 0,
+        });
+      }
+      if (a === "recipes" && b && c === "verify") {
+        const r = concept(b);
+        if (r.kind !== "recipe") throw new RouteError(400, `${b} is not a recipe`);
+        const runner = needTasks();
+        if (runner.verifying.has(b)) return { started: false, verifying: true };
+        void runner.verify(b).catch(() => {});
+        return { started: true };
+      }
+      if (a === "recipes" && b && c === "replay") {
+        const params: Record<string, string> = {};
+        if (body.params && typeof body.params === "object")
+          for (const [k, v] of Object.entries(body.params as Record<string, unknown>))
+            params[k] = String(v);
+        const t = await project.replayRecipe(
+          b,
+          params,
+          typeof body.title === "string" && body.title.trim() ? { title: body.title } : {},
+        );
+        if (tasks?.autoStart) void tasks.tick();
+        return t;
+      }
       if (a === "checks" && !b) {
         const on = String(body.on ?? "");
         const title = String(body.title ?? "").trim();

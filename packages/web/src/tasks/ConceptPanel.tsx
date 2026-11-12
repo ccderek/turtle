@@ -3,6 +3,7 @@ import { type Concept, type ConceptDetailResponse, get, post } from "../api.js";
 import { ago } from "../format.js";
 import { CheckSection, LessonChecks, TaskChecks } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
+import { RecipeCard, ReplayInfo, TaskRecipes } from "./Recipes.js";
 import type { GraphCtx } from "./TasksView.js";
 import { TaskCode, TaskConversation, TaskOutputs } from "./TaskTabs.js";
 import { evidenceCount, lessonsFor } from "./tree.js";
@@ -149,6 +150,7 @@ function ConceptOverview({
       {c.kind === "lesson" && <LessonSection c={c} act={act} detail={detail} ctx={ctx} />}
       {c.kind === "lesson" && <LessonChecks ctx={ctx} lesson={c} />}
       {c.kind === "check" && <CheckSection ctx={ctx} c={c} act={act} />}
+      {c.kind === "recipe" && <RecipeCard ctx={ctx} r={c} open />}
       {c.kind === "finding" && (
         <>
           {c.body && c.body !== c.title && <p className="node-body">{c.body}</p>}
@@ -354,7 +356,9 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
         )}
       </dl>
 
+      <ReplayInfo ctx={ctx} c={c} />
       <TaskChecks ctx={ctx} c={c} />
+      <TaskRecipes ctx={ctx} c={c} />
 
       {openQs.map((q) => (
         <QuestionBox key={q.id} ctx={ctx} q={q} act={act} />

@@ -2,7 +2,7 @@
 
 A human–AI interface and version-control layer for AI coding agents: every step an agent takes becomes a checkpoint in a tree you can inspect, fork, and steer.
 
-Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented. Phase 2, the task graph (a mind map of tasks that humans and agents both edit, versioned as an operation log), is in progress: projects, multi-source runs, agent graph tools, lessons, abandon/retry, steering running agents, checks that harden lessons into scripts, an in-process scheduler and the mind-map view (dependency arrows; conversation, outputs and checkpoints per task) are built ([docs/phase2-spec.md](docs/phase2-spec.md), architecture v0.3). Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
+Status: Phase 0 (recording layer) and Phase 1 (web UI) implemented. Phase 2, the task graph (a mind map of tasks that humans and agents both edit, versioned as an operation log), is in progress: projects, multi-source runs, agent graph tools, lessons, abandon/retry, steering running agents, checks that harden lessons into scripts, recipes that replay verified steps without a model, an in-process scheduler and the mind-map view (dependency arrows; conversation, outputs and checkpoints per task) are built ([docs/phase2-spec.md](docs/phase2-spec.md), architecture v0.3). Design: [docs/architecture.md](docs/architecture.md), [docs/phase0-spec.md](docs/phase0-spec.md), [docs/phase1-spec.md](docs/phase1-spec.md). **Hands-on test guide: [docs/tutorial.md](docs/tutorial.md).**
 
 ![task graph](docs/images/tasks-graph.png)
 
@@ -28,6 +28,7 @@ turtle goal "Build a trading system"          # a goal; `turtle graph` shows the
 turtle task add "Data feed" && turtle task start <task>
 turtle tell <task> "Also log every trade"     # steer a running task
 turtle check add <lesson> --script check_oos.py  # harden a lesson: a script run at every checkpoint
+turtle recipe replay <recipe> --param MODEL=B    # redo a verified step with other parameters, no model
 turtle run "Add a --json flag to the exporter"
 turtle status                                 # what is running, what waits for you
 turtle run --from <node> "Yes, pretty-print"  # answer a question / continue a branch

@@ -9,10 +9,13 @@ import {
   type RunnerLauncher,
   type RunSession,
   type SandboxMode,
+  type ScriptSandbox,
   type Summarizer,
+  scriptSandbox,
   startTaskRun,
   type TurtleConfig,
   uiOwnerFileFor,
+  verifyRecipe,
 } from "@turtle/core";
 
 export interface TaskRunnerOptions {
@@ -47,6 +50,8 @@ export class TaskRunner {
   autoStart: boolean;
   private readonly taskOfAgent = new Map<string, string>();
   private starting = new Set<string>();
+  /** Recipes being verified in this process. */
+  readonly verifying = new Set<string>();
   private ticking = false;
 
   constructor(private readonly o: TaskRunnerOptions) {
@@ -116,11 +121,59 @@ export class TaskRunner {
         this.taskOfAgent.delete(session.agentId);
         if (ownerFile) await rm(ownerFile, { force: true });
         this.o.log(`task ${taskId} ended: ${outcome.reason}`);
+        await this.afterRun(taskId);
         void this.tick();
       });
       return { agentId: session.agentId, mode: run.mode };
     } finally {
       this.starting.delete(taskId);
+    }
+  }
+
+  /** Where checks and recipes run: the sandbox agents use. */
+  scripts(): ScriptSandbox {
+    return scriptSandbox(this.o.config.sandbox.mode, this.o.config.sandbox.image);
+  }
+
+  /**
+   * After a task's run (architecture §3.7): verify the recipes it recorded, and when a
+   * replay's recipe failed, let an agent repair it once (with auto-start on).
+   */
+  private async afterRun(taskId: string): Promise<void> {
+    const { project } = this.o;
+    for (const r of project.recipesOf(taskId))
+      if (r.recipeState === "draft") void this.verify(r.id).catch(() => {});
+    const t = project.getConcept(taskId);
+    const spec = t?.replay;
+    if (
+      this.autoStart &&
+      t?.status === "blocked" &&
+      spec?.result &&
+      !spec.result.ok &&
+      (spec.repairs ?? 0) < 1
+    ) {
+      await project.updateConcept(taskId, {
+        replay: { ...spec, repairs: (spec.repairs ?? 0) + 1 },
+      });
+      this.o.log(`task ${taskId}: the recipe failed; an agent takes over`);
+      await this.start(taskId).catch((err: Error) =>
+        this.o.log(`could not start the repair of ${taskId}: ${err.message}`),
+      );
+    }
+  }
+
+  /** Verify a recipe by a clean replay, in the background. */
+  async verify(recipeId: string): Promise<void> {
+    if (this.verifying.has(recipeId)) return;
+    this.verifying.add(recipeId);
+    try {
+      const v = await verifyRecipe(this.o.project, recipeId, { sandbox: this.scripts() });
+      this.o.log(`recipe ${recipeId} ${v.ok ? "verified" : `failed: ${v.problems[0] ?? ""}`}`);
+    } catch (err) {
+      this.o.log(`recipe ${recipeId} could not be verified: ${(err as Error).message}`);
+      throw err;
+    } finally {
+      this.verifying.delete(recipeId);
     }
   }
 

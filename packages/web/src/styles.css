@@ -2034,6 +2034,60 @@ table.csv th {
   background: color-mix(in srgb, var(--ask) 8%, var(--surface));
 }
 
+/* recipes (D31 L2) */
+.leaf-kind.recipe {
+  color: #b05a17;
+}
+.recipe-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.recipe-card.state-verified {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+.recipe-card.state-failed {
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+}
+.recipe-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+.problems {
+  margin: 4px 0;
+  padding-left: 18px;
+  color: var(--bad);
+}
+.replay-form,
+.form-row {
+  margin-top: 6px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.inline-field {
+  display: grid;
+  grid-template-columns: minmax(60px, auto) 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.replay-info {
+  border-left: 3px solid var(--mute);
+  padding-left: 10px;
+}
+.replay-info.replay-ok {
+  border-left-color: var(--ok);
+}
+.replay-info.replay-bad {
+  border-left-color: var(--bad);
+}
+
 @media (max-width: 1100px) {
   .tasks-layout,
   .tasks-layout.with-panel {

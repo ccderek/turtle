@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type FakeAgent, fakeLauncher, type RunnerLauncher } from "@turtle/core";
 
@@ -101,6 +103,12 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
     return;
   }
 
+  // A replay whose recipe failed (architecture §3.7): fix only what failed.
+  if (/^## Replay/m.test(a.prompt) && /It FAILED/.test(a.prompt)) {
+    await repairDemo(a, pause, title);
+    return;
+  }
+
   const continuing = !a.prompt.trimStart().startsWith("# Your task");
   await a.edit(`notes/${slug}.md`, `# ${title}\n\nStep 1: looked at what exists.\n`);
   await listen();
@@ -160,6 +168,8 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
     return;
   }
   await a.graph("decision", { text: `Keep the simple version of ${title}` });
+  // Compile and measure steps leave scripts behind and record how to redo them.
+  const recipe = await prepareRecipe(a, title);
   await a.edit(`notes/${slug}.md`, `# ${title}\n\nDone. Score 0.87 over 3 runs.\n`);
   await listen();
   await pause();
@@ -191,6 +201,10 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
       await a.finish("A check fails and I do not know how to fix it.");
       return;
     }
+  }
+  if (recipe) {
+    await a.graph("recipe", recipe);
+    await a.say("Recorded a recipe; turtle verifies it by replaying it from a clean copy.");
   }
   await a.graph("brief", {
     text: `Status: done. Score 0.87 over 3 runs (evidence: results/${slug}.csv). No open questions.`,
@@ -279,3 +293,125 @@ const PHONE_PLAN: Plan = {
   brief:
     "Planned 5 tasks. Environment, compile and test plan run in parallel; the trace waits for the environment; measuring waits for all three.",
 };
+
+const COMPILE_SH = `#!/usr/bin/env bash
+# Compile a model for the phone (demo: no real toolchain).
+set -euo pipefail
+MODEL="\${MODEL:-A}"
+mkdir -p build
+case "$MODEL" in
+  A) OPS="conv2d,relu" ;;
+  *) echo "compile.sh: model $MODEL uses Conv3D, which this toolchain cannot lower (it needs the v2 op set)" >&2; exit 2 ;;
+esac
+printf 'model=%s\\nops=%s\\n' "$MODEL" "$OPS" > "build/model-$MODEL.bin"
+echo "compiled build/model-$MODEL.bin ($OPS)"
+`;
+
+const MEASURE_PY = `# Measure power and latency on the phone (demo: simulated readings with 1% noise).
+import csv, os, random
+
+model = os.environ.get("MODEL", "A")
+rate = os.environ.get("RATE", "10k")
+power, latency = {"A": (805.0, 23.4), "B": (742.0, 25.1)}.get(model, (800.0, 24.0))
+os.makedirs("results", exist_ok=True)
+path = f"results/power-{model}.csv"
+with open(path, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["run", "power_mw", "latency_ms"])
+    for i in range(1, 4):
+        w.writerow([i, round(power * random.uniform(0.99, 1.01), 1), round(latency * random.uniform(0.99, 1.01), 2)])
+print(f"measured {path} at {rate}")
+`;
+
+// biome-ignore lint/suspicious/noTemplateCurlyInString: recipe output patterns, expanded by turtle.
+const MODEL_BIN = "build/model-${MODEL}.bin";
+// biome-ignore lint/suspicious/noTemplateCurlyInString: recipe output patterns, expanded by turtle.
+const POWER_CSV = "results/power-${MODEL}.csv";
+
+/** For compile and measure steps: write the scripts and their outputs, return the recipe. */
+async function prepareRecipe(a: FakeAgent, title: string): Promise<Record<string, unknown> | null> {
+  if (/compile/i.test(title)) {
+    await a.writeFile("build/compile.sh", COMPILE_SH);
+    await a.tool(
+      "Bash",
+      { command: "MODEL=A bash build/compile.sh" },
+      { response: { stdout: "compiled build/model-A.bin (conv2d,relu)" } },
+    );
+    await a.writeFile("build/model-A.bin", "model=A\nops=conv2d,relu\n");
+    return {
+      title: "Compile a model for the phone",
+      file: "compile.sh",
+      script: "bash build/compile.sh\n",
+      params: { MODEL: "A" },
+      outputs: [MODEL_BIN],
+    };
+  }
+  if (/measure/i.test(title)) {
+    await a.writeFile("tools/measure.py", MEASURE_PY);
+    await a.tool(
+      "Bash",
+      { command: "MODEL=A RATE=10k python3 tools/measure.py" },
+      { response: { stdout: "measured results/power-A.csv at 10k" } },
+    );
+    await a.writeFile(
+      "results/power-A.csv",
+      "run,power_mw,latency_ms\n1,812.0,23.51\n2,798.0,23.22\n3,805.0,23.61\n",
+    );
+    return {
+      title: "Measure power and latency on the phone",
+      file: "measure.sh",
+      script: "python3 tools/measure.py\n",
+      params: { MODEL: "A", RATE: "10k" },
+      outputs: [POWER_CSV],
+      tolerance: 0.03,
+    };
+  }
+  return null;
+}
+
+/** A replay whose recipe failed: fix only the compile script, then record the new recipe. */
+async function repairDemo(
+  a: FakeAgent,
+  pause: () => Promise<unknown>,
+  title: string,
+): Promise<void> {
+  const model = /MODEL=(\w+)/.exec(a.prompt)?.[1] ?? "B";
+  await a.say(
+    `(demo agent, no model is called) The recipe failed for MODEL=${model}: the toolchain cannot lower Conv3D. I will change only the compile script.`,
+  );
+  await pause();
+  const path = "build/compile.sh";
+  const before = await readFile(join(a.workspace, path), "utf8").catch(() => COMPILE_SH);
+  await a.tool("Read", { file_path: path }, { response: before });
+  await pause();
+  await a.edit(
+    path,
+    before.replace(
+      'A) OPS="conv2d,relu" ;;',
+      `A) OPS="conv2d,relu" ;;\n  ${model}) OPS="conv3d,relu" ;;  # the v2 op set lowers Conv3D`,
+    ),
+  );
+  await a.tool(
+    "Bash",
+    { command: `MODEL=${model} bash build/compile.sh` },
+    { response: { stdout: `compiled build/model-${model}.bin (conv3d,relu)` } },
+  );
+  await a.writeFile(`build/model-${model}.bin`, `model=${model}\nops=conv3d,relu\n`);
+  await a.graph("finding", {
+    text: `Model ${model} compiles once Conv3D is lowered with the v2 op set`,
+    evidence: [{ path: `build/model-${model}.bin` }],
+  });
+  await pause();
+  await a.checkpoint(`${title}: compiled with Conv3D lowering`, "done");
+  await a.graph("recipe", {
+    title: "Compile a model for the phone",
+    file: "compile.sh",
+    script: "bash build/compile.sh\n",
+    params: { MODEL: model },
+    outputs: [MODEL_BIN],
+  });
+  await a.graph("brief", {
+    text: `Status: done. The recipe failed for MODEL=${model}; I changed only build/compile.sh (Conv3D lowering) and recorded an updated recipe.`,
+  });
+  await a.finish("Fixed the compile step.");
+}
