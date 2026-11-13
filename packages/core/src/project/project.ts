@@ -247,6 +247,10 @@ export class Project {
     return Project.create(dir, { sources: [top], ...(o.home ? { home: o.home } : {}) });
   }
 
+  get isOpen(): boolean {
+    return this.db.isOpen;
+  }
+
   close(): void {
     this.db.close();
   }

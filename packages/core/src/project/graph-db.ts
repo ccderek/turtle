@@ -84,6 +84,11 @@ export class GraphDb {
     return new GraphDb(raw);
   }
 
+  /** False once closed (e.g. while a server shuts down and runs are still ending). */
+  get isOpen(): boolean {
+    return this.raw.open;
+  }
+
   close(): void {
     this.raw.close();
   }

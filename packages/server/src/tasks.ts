@@ -121,15 +121,22 @@ export class TaskRunner {
       sessions.set(session.agentId, session);
       this.taskOfAgent.set(session.agentId, taskId);
       this.o.log(`task ${taskId} started (${run.mode}, agent ${session.agentId})`);
-      void session.done.then(async (outcome) => {
-        run.close();
-        sessions.delete(session.agentId);
-        this.taskOfAgent.delete(session.agentId);
-        if (ownerFile) await rm(ownerFile, { force: true });
-        this.o.log(`task ${taskId} ended: ${outcome.reason}`);
-        await this.afterRun(taskId);
-        void this.tick();
-      });
+      // Follow-up work must never throw unhandled: that would stop `turtle ui`.
+      void session.done
+        .then(async (outcome) => {
+          run.close();
+          sessions.delete(session.agentId);
+          this.taskOfAgent.delete(session.agentId);
+          if (ownerFile) await rm(ownerFile, { force: true });
+          this.o.log(`task ${taskId} ended: ${outcome.reason}`);
+          // The project is closed when the server is shutting down: nothing more to do.
+          if (!project.isOpen) return;
+          await this.afterRun(taskId);
+          await this.tick();
+        })
+        .catch((err: Error) => {
+          if (project.isOpen) this.o.log(`after task ${taskId}: ${err.message}`);
+        });
       return { agentId: session.agentId, mode: run.mode };
     } finally {
       this.starting.delete(taskId);
@@ -256,7 +263,7 @@ export class TaskRunner {
 
   /** Start ready tasks while there is room. Safe to call often. */
   async tick(): Promise<void> {
-    if (!this.autoStart || this.ticking) return;
+    if (!this.autoStart || this.ticking || !this.o.project.isOpen) return;
     this.ticking = true;
     try {
       for (const t of this.ready()) {
@@ -269,6 +276,8 @@ export class TaskRunner {
           });
         });
       }
+    } catch (err) {
+      if (this.o.project.isOpen) this.o.log(`scheduler: ${(err as Error).message}`);
     } finally {
       this.ticking = false;
     }

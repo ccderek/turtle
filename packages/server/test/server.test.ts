@@ -948,4 +948,38 @@ describe("turtle ui server", () => {
     expect((await status(b2.id)).replay?.result?.ok).toBe(true);
     t.project?.close();
   });
+  it("does not crash when the project closes while a run is ending", async () => {
+    const t = await setup({ project: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "G", plan: false },
+      })
+    ).body.goal;
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Slow", assignee: { type: "agent" } },
+      })
+    ).body;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    t.scripts.push(async (a) => {
+      await a.writeFile("a.txt", "a\n");
+      await gate;
+      await a.finish();
+    });
+    await t.api(`/api/tasks/${task.id}/start`, { method: "POST", body: {} });
+    await t.waitFor(
+      async () =>
+        (await t.api<ConceptDetailResponse>(`/api/concepts/${task.id}`)).body.concept.status ===
+        "running",
+    );
+    t.project?.close();
+    release();
+    // The run ends on a closed project: its follow-up work must not throw unhandled.
+    await new Promise((r) => setTimeout(r, 1500));
+  });
 });

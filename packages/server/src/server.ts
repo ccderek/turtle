@@ -130,16 +130,22 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
   let lastToken = changeToken();
   let stopSeq = db.listEvents({ type: "stop_request" }).at(-1)?.seq ?? 0;
   const poll = setInterval(() => {
-    const token = changeToken();
-    if (token === lastToken) return;
-    lastToken = token;
-    for (const e of db.listEvents({ type: "stop_request", afterSeq: stopSeq })) {
-      stopSeq = e.seq;
-      const s = e.agentId ? sessions.get(e.agentId) : undefined;
-      // The session also sees the request at its next tool boundary; never interrupt twice.
-      if (s && !s.interrupting) s.interrupt();
+    // A closed project (the server is shutting down) has nothing to report.
+    if (o.project && !o.project.isOpen) return;
+    try {
+      const token = changeToken();
+      if (token === lastToken) return;
+      lastToken = token;
+      for (const e of db.listEvents({ type: "stop_request", afterSeq: stopSeq })) {
+        stopSeq = e.seq;
+        const s = e.agentId ? sessions.get(e.agentId) : undefined;
+        // The session also sees the request at its next tool boundary; never interrupt twice.
+        if (s && !s.interrupting) s.interrupt();
+      }
+      broadcast({ type: "change" });
+    } catch (err) {
+      log(`polling for changes: ${(err as Error).message}`);
     }
-    broadcast({ type: "change" });
   }, POLL_MS);
   let reconciling = false;
   const schedulerTimer = setInterval(() => void taskRunner?.tick(), 5000);
