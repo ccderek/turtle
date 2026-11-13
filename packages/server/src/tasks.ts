@@ -52,6 +52,8 @@ export class TaskRunner {
   autoStart: boolean;
   private readonly taskOfAgent = new Map<string, string>();
   private starting = new Set<string>();
+  /** Tasks answered while their run was ending: continued when it has ended. */
+  private readonly continueQueue = new Set<string>();
   /** Recipes being verified in this process. */
   readonly verifying = new Set<string>();
   private ticking = false;
@@ -143,8 +145,25 @@ export class TaskRunner {
    * After a task's run (architecture §3.7): verify the recipes it recorded, and when a
    * replay's recipe failed, let an agent repair it once (with auto-start on).
    */
+  /** Continue `taskId` once its current run ends (an answer arrived while it was ending). */
+  continueAfterRun(taskId: string): { mode: "queued" } {
+    this.continueQueue.add(taskId);
+    return { mode: "queued" };
+  }
+
   private async afterRun(taskId: string): Promise<void> {
     const { project } = this.o;
+    if (this.continueQueue.delete(taskId)) {
+      const open = project.db
+        .listConcepts({ parentId: taskId, kind: "question" })
+        .some((q) => !q.answer && !q.dropped);
+      if (!open) {
+        await this.start(taskId).catch((err: Error) =>
+          this.o.log(`could not continue ${taskId} after the answer: ${err.message}`),
+        );
+        return;
+      }
+    }
     for (const r of project.recipesOf(taskId))
       if (r.recipeState === "draft") void this.verify(r.id).catch(() => {});
     const t = project.getConcept(taskId);
@@ -156,12 +175,22 @@ export class TaskRunner {
       !spec.result.ok &&
       (spec.repairs ?? 0) < 1
     ) {
+      // The agent's prompt includes the "next" instruction, so it is not started again.
       await project.updateConcept(taskId, {
-        replay: { ...spec, repairs: (spec.repairs ?? 0) + 1 },
+        replay: { ...spec, repairs: (spec.repairs ?? 0) + 1, nextStarted: !!spec.next },
       });
-      this.o.log(`task ${taskId}: the recipe failed; an agent takes over`);
+      this.o.log(`task ${taskId}: the replay needs an agent; one takes over`);
       await this.start(taskId).catch((err: Error) =>
         this.o.log(`could not start the repair of ${taskId}: ${err.message}`),
+      );
+      return;
+    }
+    // A replay that worked without a model: an agent continues with "next", if given.
+    if (t?.status === "done" && spec?.next && !spec.nextStarted && spec.result?.ok) {
+      await project.updateConcept(taskId, { replay: { ...spec, nextStarted: true } });
+      this.o.log(`task ${taskId}: replayed; an agent continues with the next step`);
+      await this.start(taskId, { instruction: spec.next }).catch((err: Error) =>
+        this.o.log(`could not continue ${taskId}: ${err.message}`),
       );
     }
   }

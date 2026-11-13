@@ -160,6 +160,26 @@ try {
   await badge("Compile model B", "done").waitFor(long);
   await shot("10-model-b");
 
+  step("replay a task: same start, another parameter; the recipe reruns the results, no model");
+  await open(/^Measure power and performance on the phone$/);
+  await page.getByRole("button", { name: "Replay…" }).click();
+  await page.locator(".replay-dialog fieldset label", { hasText: "The same start as before" }).click();
+  await page.locator(".replay-dialog #replay-param-RATE").fill("1k");
+  await page.locator(".replay-dialog .replay-steps li").first().waitFor(long);
+  await shot("10b-replay-dialog");
+  await page.locator(".replay-dialog button[type=submit]").click();
+  await badge("(RATE=1k)", "done").waitFor({ timeout: 120_000 });
+  await page.locator(".tasks-panel .replay-info.replay-ok").waitFor(long);
+  await shot("10c-replayed");
+
+  step("replay a task onto the repository as it is now");
+  await open(/^Compile model A for the phone$/);
+  await page.getByRole("button", { name: "Replay…" }).click();
+  await page.locator(".replay-dialog .replay-steps li").first().waitFor(long);
+  await page.locator(".replay-dialog button[type=submit]").click();
+  await badge("(on your repository)", "done").waitFor({ timeout: 120_000 });
+  await closePanel();
+
   step("abandon a task and keep the lesson");
   await open("Compile model B");
   await page.getByRole("button", { name: "Abandon…" }).click();

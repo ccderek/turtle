@@ -5,6 +5,7 @@ import { EffortSelect } from "./Agents.js";
 import { CheckSection, LessonChecks, TaskChecks } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
 import { RecipeCard, ReplayInfo, TaskRecipes } from "./Recipes.js";
+import { ReplayDialog } from "./Replay.js";
 import { ShareDialog } from "./Share.js";
 import type { GraphCtx } from "./TasksView.js";
 import { TaskCode, TaskConversation, TaskOutputs } from "./TaskTabs.js";
@@ -307,6 +308,7 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
   const [subTitle, setSubTitle] = useState("");
   const [hereTitle, setHereTitle] = useState("");
   const [effort, setEffort] = useState("");
+  const [replaying, setReplaying] = useState(false);
   const hasCheckpoint = ctx.graph.links.some(
     (l) => !l.removed && l.from === c.id && l.rel === "evidence" && l.to.type === "node",
   );
@@ -472,6 +474,16 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
       )}
 
       <section className="sec actions-row">
+        {hasCheckpoint && (
+          <button
+            type="button"
+            onClick={() => setReplaying(true)}
+            title="Redo this task's steps on your repository now, from the same start, or on another task's checkpoint"
+          >
+            Replay…
+          </button>
+        )}
+        {replaying && <ReplayDialog ctx={ctx} c={c} onClose={() => setReplaying(false)} />}
         {!gone && (
           <button type="button" onClick={() => setShowAbandon((v) => !v)}>
             Abandon…

@@ -492,7 +492,8 @@ describe("turtle ui server", () => {
       method: "POST",
       body: { text: "Daily" },
     });
-    expect(ans.body.started.mode).toBe("continue");
+    // "queued" when the run that asked was still ending; it continues right after.
+    expect(["continue", "queued"]).toContain(ans.body.started.mode);
     await conceptStatus(task.id, "done");
     expect(continued).toContain("Daily or hourly bars? → Daily");
 
@@ -837,6 +838,54 @@ describe("turtle ui server", () => {
     expect(
       (await t.api<{ defaults: Record<string, unknown> }>("/api/project")).body.defaults.effort,
     ).toBeUndefined();
+    t.project?.close();
+  });
+
+  it("plans and runs a path replay, then lets an agent continue with the next step", async () => {
+    const t = await setup({ project: true, autoStart: true });
+    t.scripts.push(async (a) => {
+      await a.writeFile("src/a.txt", "a\n");
+      await a.checkpoint("Step one", "progress");
+      await a.writeFile("src/b.txt", "b\n");
+      await a.checkpoint("Step two", "done");
+      await a.finish();
+    });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "G", plan: false },
+      })
+    ).body.goal;
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Two steps", assignee: { type: "agent" } },
+      })
+    ).body;
+    const status = async (id: string) =>
+      (await t.api<ConceptDetailResponse>(`/api/concepts/${id}`)).body.concept;
+    await t.waitFor(async () => (await status(task.id)).status === "done");
+    const plan = await t.api<{ steps: { mode: string; paths: string[] }[] }>("/api/replays/plan", {
+      method: "POST",
+      body: { taskId: task.id },
+    });
+    expect(plan.body.steps.map((s) => s.paths.join())).toEqual(["src/a.txt", "src/b.txt"]);
+
+    let nextPrompt = "";
+    t.scripts.push(async (a) => {
+      nextPrompt = a.prompt;
+      await a.checkpoint("Compared", "done");
+      await a.finish();
+    });
+    const r = await t.api<Concept>("/api/replays", {
+      method: "POST",
+      body: { taskId: task.id, onto: "repo", next: "Compare with the original" },
+    });
+    expect(r.body.title).toBe("Two steps (on your repository)");
+    await t.waitFor(async () => (await status(r.body.id)).replay?.nextStarted === true);
+    await t.waitFor(async () => nextPrompt !== "" && (await status(r.body.id)).status === "done");
+    expect(nextPrompt).toContain("Compare with the original");
+    expect((await status(r.body.id)).replay?.result?.ok).toBe(true);
     t.project?.close();
   });
 });

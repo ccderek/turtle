@@ -2,8 +2,10 @@ import {
   type Actor,
   type Concept,
   type ConceptFields,
+  createPathReplay,
   type Link,
   type Project,
+  planReplay,
   stopTask,
   tellTask,
 } from "@turtle/core";
@@ -209,6 +211,42 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
 
     async post(parts: string[], body: Record<string, unknown>): Promise<unknown> {
       const [, a, b, c] = parts;
+      if (a === "replays" && b === "plan" && !c) {
+        const plan = await planReplay(
+          project,
+          task(String(body.taskId ?? "")).id,
+          typeof body.nodeId === "string" && body.nodeId ? body.nodeId : undefined,
+        );
+        return {
+          source: plan.source,
+          steps: plan.steps,
+          params: plan.params,
+          recipe: plan.recipe ? { id: plan.recipe.id, title: plan.recipe.title } : null,
+          outputs: plan.outputs,
+        };
+      }
+      if (a === "replays" && !b) {
+        const params: Record<string, string> = {};
+        if (body.params && typeof body.params === "object")
+          for (const [k, v] of Object.entries(body.params as Record<string, unknown>))
+            params[k] = String(v);
+        const onto =
+          body.onto === "start"
+            ? ("start" as const)
+            : typeof body.ontoTask === "string" && body.ontoTask
+              ? { taskId: task(body.ontoTask).id }
+              : ("repo" as const);
+        const t = await createPathReplay(project, {
+          taskId: task(String(body.taskId ?? "")).id,
+          ...(typeof body.nodeId === "string" && body.nodeId ? { nodeId: body.nodeId } : {}),
+          onto,
+          params,
+          ...(typeof body.next === "string" ? { next: body.next } : {}),
+          ...(typeof body.title === "string" ? { title: body.title } : {}),
+        });
+        if (tasks?.autoStart) void tasks.tick();
+        return t;
+      }
       if (a === "recipes" && !b) {
         const taskId = String(body.taskId ?? "");
         const title = String(body.title ?? "").trim();
@@ -329,16 +367,22 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
         const q = concept(b);
         const parent = q.parentId ? project.getConcept(q.parentId) : null;
         let started: unknown = null;
+        // The answer must reach the agent, even if the run that asked ended as "done"
+        // while the answer was being recorded.
         if (
           body.continue !== false &&
           parent?.kind === "task" &&
-          parent.status === "need_decision" &&
+          !["abandoned", "dropped", "paused"].includes(parent.status ?? "") &&
           tasks
         ) {
           const open = project.db
             .listConcepts({ parentId: parent.id, kind: "question" })
             .some((x) => !x.answer);
-          if (!open) started = await tasks.start(parent.id);
+          // The run that asked may still be ending: continue as soon as it has.
+          if (!open)
+            started = tasks.runningTasks().has(parent.id)
+              ? tasks.continueAfterRun(parent.id)
+              : await tasks.start(parent.id);
         }
         return { decision: d, started };
       }

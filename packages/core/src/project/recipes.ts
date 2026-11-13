@@ -200,7 +200,7 @@ export function recipeLauncher(
     async (a) => {
       const task = project.getConcept(taskId);
       const spec = task?.replay;
-      const recipe = spec ? project.getConcept(spec.recipeId) : null;
+      const recipe = spec?.recipeId ? project.getConcept(spec.recipeId) : null;
       if (!task || !spec || recipe?.kind !== "recipe" || !recipe.file || !recipe.script) {
         await a.say("This task has no recipe to replay.");
         await a.checkpoint("No recipe to replay", "blocked");
@@ -271,7 +271,8 @@ export function recipeLauncher(
 /** The "## Replay" section of a replay task's prompt, for an agent repairing it. */
 export function replayContext(project: Project, task: Concept): string | null {
   const spec = task.replay;
-  if (!spec) return null;
+  // Path replays have their own context (replay.ts).
+  if (!spec?.recipeId || spec.source) return null;
   const recipe = project.getConcept(spec.recipeId);
   if (!recipe) return null;
   const from = project.getConcept(recipe.parentId ?? "");

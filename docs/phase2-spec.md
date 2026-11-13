@@ -361,6 +361,19 @@ A lesson in the prompt is advice. A **check** is a script turtle runs, so a less
 
 Not built yet: recipes in multi-source projects; replaying a chain of recipes (compile → measure) as one action; comparing a replay's outputs with the original's (e.g. power of B vs A) as a check.
 
+### 11.4 Path replay (M7.7, architecture §3.7)
+
+| Part | As built |
+|---|---|
+| **Plan** | `planReplay(project, task, checkpoint?)` (core `project/replay.ts`): the task's semantic checkpoints from its branch start to the checkpoint. Each one whose code changed (outputs left out: the task's output concepts and its recipe's outputs) is an `apply` step; then a `recipe` step if the task has a verified recipe, or a `redo` step (an agent regenerates the results) if it has outputs but no recipe. `POST /api/replays/plan` returns it for the dialog |
+| **Create** | `createPathReplay` / `POST /api/replays {taskId, nodeId?, onto: "repo" \| "start" \| "checkpoint", ontoTask?, params, next?}`: a sibling task "<task> (<changed params>, on your repository)" with `replay = {source, onto, steps, params, recipeId?, next?}`. Onto the start: `startFrom` = the original branch's start node; onto a task: its latest checkpoint; onto the repository: no `startFrom`, so the run starts from the working copy |
+| **First run** | `pathReplayLauncher`: a scripted runner (model "replay", no session, no cost). For each `apply` step it diffs the original checkpoints (`--binary`, outputs excluded), checks and applies the patch in the workspace (`git apply`, with git discovery stopped above the workspace), records a Bash step and checkpoints. Then it runs the recipe with the replay's parameters. It stops at the first failure: that step is `failed` (with git's message and the change), the rest `handed`; the run ends blocked with `replay.result.ok = false` |
+| **Agent** | With auto-start on, `turtle ui` starts one agent run (`replay.repairs`). The branch has no conversation, so the agent gets the full task prompt with the "## Replay" section (`pathReplayContext`): done steps, left steps with intent, files and original change, and "Then". After a replay that needed no agent, `next` starts an agent run with that instruction (`replay.nextStarted`) |
+| **UI** | **Replay…** on a task with a checkpoint: steps up to, onto, parameters (from the recipe), the planned steps with their mode, "Then". The replay task's *Replay* section lists each step's status |
+| **Limits** | Single-source projects. One task's path (not a chain of dependent tasks yet). `git apply` without three-way merge: a change to lines that moved fails over to the agent rather than merging |
+
+Also fixed with it: an answer that arrives while the run that asked is ending now continues the task once that run has ended (before, the run could end "done" and the answer never reached the agent).
+
 ## 12. UI
 
 The mind map becomes the home screen; the Phase 1 tree becomes the **Code** tab of a task (filtered to its checkpoints) and a global Code view.
@@ -489,6 +502,7 @@ turtle stats --gate                        # G1–G5 (§15)
 | M7 | Mind map UI: tidy tree, dependency arrows, conversation/outputs/code tabs, new task from here, dependency picker | **Done**: `pnpm ui:smoke` drives the trading and phone scenarios end to end |
 | M7.5 | Checks: lessons hardened into scripts, enforced at checkpoints (architecture §3.7) | **Done**: the trading demo's check fails, the agent fixes it, B passes; `pnpm ui:smoke` covers it |
 | M7.6 | Recipes verified by a clean replay; replay with parameters without a model; agent repair of a failed replay; scripts in the agent's sandbox; `turtle_check` helpers | **Done**: the phone demo's MODEL=B replay fails, is repaired and verifies; `pnpm ui:smoke` covers it |
+| M7.7 | Path replay: a task's steps onto your repository now, the same start or another checkpoint; code applied, results rerun; agent only for what fails; "then" | **Done**: `pnpm ui:smoke` replays the measurement with RATE=1k and the compile step onto the repository without a model |
 | M8 | Export (`turtle share`, `--check`, judgments), `stats --gate` with G5, the audit, `e2e:rewind`, Gate dialog, docs | **Done**: gate report on the demo (`pnpm ui:smoke` shares, judges and opens the gate); `e2e:rewind --fake` passes; tutorial Part E |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 

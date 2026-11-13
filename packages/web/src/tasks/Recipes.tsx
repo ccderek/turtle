@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { type Concept, post } from "../api.js";
 import { ago } from "../format.js";
+import { PathReplaySteps } from "./Replay.js";
 import type { GraphCtx } from "./TasksView.js";
 
 const STATE_TONE: Record<string, string> = {
@@ -326,9 +327,20 @@ function RecipeForm({
 export function ReplayInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
   const spec = c.replay;
   if (!spec) return null;
-  const r = ctx.byId.get(spec.recipeId);
-  const from = r ? ctx.byId.get(r.parentId ?? "") : undefined;
+  const path = !!spec.source;
+  const r = spec.recipeId ? ctx.byId.get(spec.recipeId) : undefined;
+  const from = path
+    ? ctx.byId.get(spec.source?.taskId ?? "")
+    : r
+      ? ctx.byId.get(r.parentId ?? "")
+      : undefined;
   const res = spec.result;
+  const where =
+    spec.onto === "repo"
+      ? " on your repository as it is now"
+      : spec.onto === "checkpoint"
+        ? " on another task's checkpoint"
+        : "";
   return (
     <section className={`sec replay-info${res ? (res.ok ? " replay-ok" : " replay-bad") : ""}`}>
       <h4>Replay</h4>
@@ -340,24 +352,38 @@ export function ReplayInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
           </button>
         ) : (
           "a task"
-        )}{" "}
-        with <span className="mono">{fmt(spec.params)}</span>, by running its recipe first (no
-        model).
+        )}
+        {where}
+        {Object.keys(spec.params).length > 0 && (
+          <>
+            {" "}
+            with <span className="mono">{fmt(spec.params)}</span>
+          </>
+        )}
+        {path
+          ? ": code changes applied, results rerun, no model unless a step fails."
+          : ", by running its recipe first (no model)."}
       </p>
+      {path && <PathReplaySteps c={c} />}
       {res ? (
         <>
           <p className="small">
-            {res.ok ? "✓ The recipe ran" : "✗ The recipe failed"} {ago(res.at)}
+            {res.ok ? "✓ Done without a model" : `✗ ${path ? "Stopped" : "The recipe failed"}`}{" "}
+            {ago(res.at)}
             {!res.ok &&
               (spec.repairs
-                ? "; an agent took over to fix only what failed."
-                : "; continue the task to let an agent fix it.")}
+                ? "; an agent took over the rest."
+                : "; continue the task to let an agent do the rest.")}
+            {res.ok &&
+              spec.next &&
+              (spec.nextStarted ? "; an agent continued with the next step." : "")}
           </p>
           <pre className="check-output">{res.output}</pre>
         </>
       ) : (
         <p className="muted small">Not run yet.</p>
       )}
+      {spec.next && <p className="small">Then: {spec.next}</p>}
     </section>
   );
 }

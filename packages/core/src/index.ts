@@ -18,6 +18,7 @@ export * from "./project/oplog.js";
 export * from "./project/outputs.js";
 export * from "./project/project.js";
 export * from "./project/recipes.js";
+export * from "./project/replay.js";
 export * from "./project/sources.js";
 export * from "./project/task-run.js";
 export * from "./project/types.js";

@@ -103,6 +103,11 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
     return;
   }
 
+  // A path replay that stopped: do the steps left (the demo rewrites their files).
+  if (/^## Replay/m.test(a.prompt) && /Left for you/.test(a.prompt)) {
+    await pathReplayDemo(a, pause, title);
+    return;
+  }
   // A replay whose recipe failed (architecture §3.7): fix only what failed.
   if (/^## Replay/m.test(a.prompt) && /It FAILED/.test(a.prompt)) {
     await repairDemo(a, pause, title);
@@ -414,4 +419,42 @@ async function repairDemo(
     text: `Status: done. The recipe failed for MODEL=${model}; I changed only build/compile.sh (Conv3D lowering) and recorded an updated recipe.`,
   });
   await a.finish("Fixed the compile step.");
+}
+
+/** A path replay handed to the agent: redo the steps left, file by file. */
+async function pathReplayDemo(
+  a: FakeAgent,
+  pause: () => Promise<unknown>,
+  title: string,
+): Promise<void> {
+  const left = a.prompt.split("Left for you")[1] ?? "";
+  const files = [...left.matchAll(/^Files: (.+)$/gm)].flatMap((m) =>
+    (m[1] ?? "").split(", ").filter((f) => f && f !== "-"),
+  );
+  await a.say(
+    `(demo agent, no model is called) The replay stopped; ${files.length} file(s) are left for me. I redo them on the code as it is now.`,
+  );
+  await pause();
+  for (const f of files) {
+    const before = await readFile(join(a.workspace, f), "utf8").catch(() => "");
+    const text = f.endsWith(".csv")
+      ? "metric,value\nruns,3\nscore,0.91\nout_of_sample,0.66\n"
+      : `${before}${before.endsWith("\n") || !before ? "" : "\n"}(redone on the current code by the demo agent)\n`;
+    await a.writeFile(f, text);
+  }
+  await a.tool(
+    "Bash",
+    { command: "ls && git diff --stat" },
+    { response: { stdout: files.join("\n") } },
+  );
+  await a.graph("finding", {
+    text: `Replayed "${title}": the steps left were redone on the current code`,
+    ...(files.length ? { evidence: [{ path: files[0] }] } : {}),
+  });
+  await pause();
+  await a.checkpoint(`${title}: replay finished by the agent`, "done");
+  await a.graph("brief", {
+    text: "Status: done. The replay applied what it could; I redid the rest.",
+  });
+  await a.finish("Replay finished.");
 }

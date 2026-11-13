@@ -23,6 +23,7 @@ import { checkReplyNote, failingChecks, runTaskChecks, type TaskCheckRun } from 
 import { assembleTaskContext, graphText } from "./context.js";
 import type { Project } from "./project.js";
 import { recipeLauncher } from "./recipes.js";
+import { pathReplayLauncher } from "./replay.js";
 import { openRunSources } from "./sources.js";
 import type { Actor, Concept, LinkTarget, TaskStatus } from "./types.js";
 import { shortConceptIds } from "./view.js";
@@ -530,7 +531,7 @@ export async function startTaskRun(
           .map(([k, v]) => `${k}=${v}`)
           .join(" ")}.`
       : assembleTaskContext(project, task.id, o.instruction);
-    if (replayFirst) opts.model = "recipe";
+    if (replayFirst) opts.model = task.replay?.source ? "replay" : "recipe";
   }
 
   const binding = new TaskRunBinding(project, task.id, primary.id, scripts);
@@ -542,7 +543,9 @@ export async function startTaskRun(
         db,
         config,
         launcher: replayFirst
-          ? recipeLauncher(project, task.id, scripts)
+          ? task.replay?.source
+            ? pathReplayLauncher(project, task.id, scripts)
+            : recipeLauncher(project, task.id, scripts)
           : deps.launcherFor(sandboxMode, config),
         summarizer: deps.summarizer,
         graph: binding,
