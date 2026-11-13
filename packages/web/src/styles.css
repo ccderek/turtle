@@ -2215,6 +2215,37 @@ fieldset.effort-list legend {
 .chain-info {
   margin: 0 0 6px;
 }
+.comparison {
+  margin: 6px 0;
+}
+.comparison h5 {
+  margin: 6px 0 4px;
+  font-weight: 600;
+}
+.cmp-file {
+  margin-bottom: 6px;
+}
+.cmp-table {
+  border-collapse: collapse;
+  margin-top: 2px;
+}
+table.cmp-table th,
+table.cmp-table > tbody > tr > td {
+  padding: 2px 8px 2px 0;
+  text-align: right;
+}
+table.cmp-table th:first-child,
+table.cmp-table td:first-child {
+  text-align: left;
+}
+table.cmp-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+table.cmp-table td.up,
+table.cmp-table td.down {
+  color: var(--info);
+}
 
 @media (max-width: 1100px) {
   .tasks-layout,

@@ -172,6 +172,8 @@ try {
   await page.locator(".replay-dialog button[type=submit]").click();
   await badge("(RATE=1k)", "done").waitFor({ timeout: 120_000 });
   await page.locator(".tasks-panel .replay-info.replay-ok").waitFor(long);
+  await page.locator(".tasks-panel .cmp-table").waitFor(long);
+  await page.locator(".tasks-panel .comparison").scrollIntoViewIfNeeded();
   await shot("10c-replayed");
 
   step("replay a task onto the repository as it is now");

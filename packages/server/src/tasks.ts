@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   type Concept,
   GitStore,
+  nextInstruction,
   OpsError,
   type Project,
   type RunEvent,
@@ -189,7 +190,7 @@ export class TaskRunner {
     if (t?.status === "done" && spec?.next && !spec.nextStarted && spec.result?.ok) {
       await project.updateConcept(taskId, { replay: { ...spec, nextStarted: true } });
       this.o.log(`task ${taskId}: replayed; an agent continues with the next step`);
-      await this.start(taskId, { instruction: spec.next }).catch((err: Error) =>
+      await this.start(taskId, { instruction: nextInstruction(spec) }).catch((err: Error) =>
         this.o.log(`could not continue ${taskId}: ${err.message}`),
       );
     }

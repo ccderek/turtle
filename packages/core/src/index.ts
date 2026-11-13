@@ -9,6 +9,7 @@ export * from "./ids.js";
 export * from "./ops.js";
 export * from "./project/audit.js";
 export * from "./project/checks.js";
+export * from "./project/compare.js";
 export * from "./project/context.js";
 export * from "./project/export.js";
 export * from "./project/gate.js";

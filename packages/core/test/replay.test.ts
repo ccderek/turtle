@@ -11,11 +11,12 @@ import { verifyRecipe } from "../src/project/recipes.js";
 import {
   createChainReplay,
   createPathReplay,
+  nextInstruction,
   planChain,
   planReplay,
 } from "../src/project/replay.js";
 import { startTaskRun } from "../src/project/task-run.js";
-import type { Concept } from "../src/project/types.js";
+import type { Concept, ReplaySpec } from "../src/project/types.js";
 import { HeuristicSummarizer } from "../src/run/summarizer.js";
 import { type FakeAgent, type FakeScript, fakeLauncher } from "../src/testing/fake-runner.js";
 import { makeRepo, tempDir } from "./helpers.js";
@@ -118,11 +119,15 @@ describe("path replay (architecture §3.7)", () => {
     expect(launches()).toBe(1); // only the original's agent
     expect(await readFile(join(ws, "build/model-A.bin"), "utf8")).toBe("model=A rate=10k\n");
     expect(existsSync(join(ws, "notes.md"))).toBe(true);
-    expect(project.getConcept(r.id)?.replay?.steps?.map((s) => s.status)).toEqual([
-      "applied",
-      "applied",
-      "done",
+    const spec = project.getConcept(r.id)?.replay;
+    expect(spec?.steps?.map((s) => s.status)).toEqual(["applied", "applied", "done"]);
+    // The rerun result is compared with the original's, and handed to the next agent.
+    expect(spec?.comparison?.files).toEqual([
+      { original: "build/model-A.bin", replay: "build/model-A.bin", status: "changed" },
     ]);
+    expect(nextInstruction({ ...(spec as ReplaySpec), next: "Compare" })).toContain(
+      "- build/model-A.bin: changed",
+    );
   });
 
   it("replays onto the repository as it is now (the code changed)", async () => {

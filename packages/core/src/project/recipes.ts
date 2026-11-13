@@ -9,8 +9,9 @@ import { INTERPRETER, runScript, type ScriptSandbox } from "../run/script.js";
 import type { RunnerLauncher } from "../run/transport.js";
 import { fakeLauncher } from "../testing/fake-runner.js";
 import { runCheck } from "./checks.js";
+import { compareFile, comparisonSummary, comparisonText } from "./compare.js";
 import type { Project } from "./project.js";
-import type { Actor, Concept, RecipeVerification } from "./types.js";
+import type { Actor, Concept, RecipeVerification, ReplayComparison } from "./types.js";
 
 export const RECIPE_TIMEOUT_MS = 30 * 60_000;
 
@@ -216,6 +217,11 @@ export function recipeLauncher(
       await a.say(
         `Replaying the recipe "${recipe.title}" (${recipe.file}) with ${fmtParams(params)}. No model is called; an agent takes over only if it fails.`,
       );
+      // The workspace starts from the verified checkpoint: its results are the original's.
+      const before = expandOutputs(recipe.outputs, recipe.params ?? {});
+      const originals = await Promise.all(
+        before.map((o) => readFile(join(a.workspace, o)).catch(() => null)),
+      );
       for (const out of expandOutputs(recipe.outputs, params))
         await rm(join(a.workspace, out), { recursive: true, force: true });
       const run = await runScript({
@@ -234,23 +240,33 @@ export function recipeLauncher(
         },
         { response: run.output, failed: !run.ok },
       );
+      let comparison: ReplayComparison | undefined;
+      if (run.ok) {
+        const files = [];
+        for (const [i, rel] of expandOutputs(recipe.outputs, params).entries()) {
+          const b = await readFile(join(a.workspace, rel)).catch(() => null);
+          files.push(compareFile(before[i] ?? rel, rel, originals[i] ?? null, b));
+        }
+        comparison = { against: task.startFrom?.checkpointId ?? "", files };
+      }
       await project.updateConcept(
         taskId,
         {
           replay: {
             ...spec,
             result: { ok: run.ok, output: run.output, at: new Date().toISOString() },
+            ...(comparison ? { comparison } : {}),
           },
         },
         { actor },
       );
       if (run.ok) {
         const cp = await a.checkpoint(
-          `Replayed "${recipe.title}" with ${fmtParams(params)}\n\n${lastLines(run.output, 6)}`,
+          `Replayed "${recipe.title}" with ${fmtParams(params)}\n\n${lastLines(run.output, 6)}${comparison ? `\n\nCompared with the original:\n${comparisonText(comparison)}` : ""}`,
           "done",
         );
         await a.graph("brief", {
-          text: `Status: ${/FAILED/.test(cp.message) ? "the recipe ran, but a check fails" : "done"}. Replayed "${recipe.title}" with ${fmtParams(params)}; no model was called.`,
+          text: `Status: ${/FAILED/.test(cp.message) ? "the recipe ran, but a check fails" : "done"}. Replayed "${recipe.title}" with ${fmtParams(params)}; no model was called.${comparison ? ` Against the original: ${comparisonSummary(comparison)}.` : ""}`,
         });
         await a.finish("Replayed.");
       } else {

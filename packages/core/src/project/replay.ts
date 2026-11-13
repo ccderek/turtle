@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { TurtleDb } from "../db/db.js";
@@ -9,9 +9,10 @@ import { OpsError } from "../ops.js";
 import { INTERPRETER, runScript, type ScriptSandbox } from "../run/script.js";
 import type { RunnerLauncher } from "../run/transport.js";
 import { fakeLauncher } from "../testing/fake-runner.js";
+import { compareFile, comparisonSummary, comparisonText } from "./compare.js";
 import type { Project } from "./project.js";
 import { expandOutputs, RECIPE_TIMEOUT_MS } from "./recipes.js";
-import type { Actor, Concept, ReplaySpec, ReplayStep } from "./types.js";
+import type { Actor, Concept, ReplayComparison, ReplaySpec, ReplayStep } from "./types.js";
 
 /**
  * Path replay (architecture §3.7): redo the steps of a task — its checkpoints up to one —
@@ -378,6 +379,16 @@ export async function createChainReplay(
   return made;
 }
 
+/**
+ * The instruction for the agent that continues after a replay ("then"), with the
+ * comparison of the results so it interprets them instead of recomputing them.
+ */
+export function nextInstruction(spec: ReplaySpec): string {
+  const next = spec.next ?? "Continue the task.";
+  if (!spec.comparison) return next;
+  return `${next}\n\nThe replay reran the results. Compared with the original's (computed by turtle; other parameters are expected to give other numbers):\n${comparisonText(spec.comparison)}\n\nInterpret these differences; do not recompute them. Record what matters as a finding with the result files as evidence.`;
+}
+
 const fmtParams = (p: Record<string, string>) =>
   Object.entries(p)
     .map(([k, v]) => `${k}=${v}`)
@@ -411,8 +422,13 @@ export function pathReplayLauncher(
         onBehalfOf: project.identity.memberId,
       };
       const steps: ReplayStep[] = spec.steps.map((s) => ({ ...s }));
+      let comparison: ReplayComparison | undefined;
       const save = async (result: ReplaySpec["result"]) =>
-        project.updateConcept(taskId, { replay: { ...spec, steps, result } }, { actor });
+        project.updateConcept(
+          taskId,
+          { replay: { ...spec, steps, result, ...(comparison ? { comparison } : {}) } },
+          { actor },
+        );
       const recipe = spec.recipeId ? project.getConcept(spec.recipeId) : null;
       const outputs = outputsOf(project, source, recipe);
       await a.say(
@@ -504,8 +520,19 @@ export function pathReplayLauncher(
               },
               { response: run.output, failed: !run.ok },
             );
-            if (run.ok) step.status = "done";
-            else {
+            if (run.ok) {
+              step.status = "done";
+              const original = nodeOf(spec.source.nodeId);
+              if (original)
+                comparison = await compareResults(
+                  store.commonDir,
+                  original.commitSha,
+                  a.workspace,
+                  recipe,
+                  spec.params,
+                  original.id,
+                );
+            } else {
               step.status = "failed";
               step.note = run.output.slice(-NOTE_MAX);
               stopped = {
@@ -527,11 +554,11 @@ export function pathReplayLauncher(
             at: new Date().toISOString(),
           });
           const cp = await a.checkpoint(
-            `Replayed "${source.title}"${Object.keys(spec.params).length ? ` with ${fmtParams(spec.params)}` : ""}\n\n${steps.map((s, i) => `${i + 1}. ${firstLine(s.summary)} — ${s.status}`).join("\n")}`,
+            `Replayed "${source.title}"${Object.keys(spec.params).length ? ` with ${fmtParams(spec.params)}` : ""}\n\n${steps.map((s, i) => `${i + 1}. ${firstLine(s.summary)} — ${s.status}`).join("\n")}${comparison ? `\n\nCompared with the original:\n${comparisonText(comparison)}` : ""}`,
             "done",
           );
           await a.graph("brief", {
-            text: `Status: ${/FAILED/.test(cp.message) ? "replayed, but a check fails" : "done"}. Replayed ${applied} step(s) of "${source.title}" without a model.`,
+            text: `Status: ${/FAILED/.test(cp.message) ? "replayed, but a check fails" : "done"}. Replayed ${applied} step(s) of "${source.title}" without a model.${comparison ? ` Against the original: ${comparisonSummary(comparison)}.` : ""}`,
           });
           await a.finish("Replayed.");
         } else {
@@ -552,6 +579,31 @@ export function pathReplayLauncher(
     },
     { sessionless: true, free: true, model: "replay" },
   );
+}
+
+/**
+ * The recipe's results in the workspace against the original checkpoint's: each output,
+ * named with the recipe's own parameters there and the replay's here.
+ */
+async function compareResults(
+  gitDir: string,
+  commit: string,
+  workspace: string,
+  recipe: Concept,
+  params: Record<string, string>,
+  against: string,
+): Promise<ReplayComparison> {
+  const before = expandOutputs(recipe.outputs, recipe.params ?? {});
+  const after = expandOutputs(recipe.outputs, params);
+  const files = [];
+  for (const [i, rel] of after.entries()) {
+    const orig = before[i] ?? rel;
+    const show = await runGit(["show", `${commit}:${orig}`], { gitDir, okCodes: [0, 128] });
+    const a = show.exitCode === 0 ? show.stdout : null;
+    const b = await readFile(join(workspace, rel)).catch(() => null);
+    files.push(compareFile(orig, rel, a, b));
+  }
+  return { against, files };
 }
 
 async function patchText(

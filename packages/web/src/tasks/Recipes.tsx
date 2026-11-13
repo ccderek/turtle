@@ -383,11 +383,70 @@ export function ReplayInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
               (spec.nextStarted ? "; an agent continued with the next step." : "")}
           </p>
           <pre className="check-output">{res.output}</pre>
+          {spec.comparison && <Comparison c={spec.comparison} />}
         </>
       ) : (
         <p className="muted small">Not run yet.</p>
       )}
       {spec.next && <p className="small">Then: {spec.next}</p>}
     </section>
+  );
+}
+
+const num = (n: number) =>
+  Math.abs(n) >= 1000 || Number.isInteger(n) ? String(Math.round(n * 100) / 100) : n.toPrecision(4);
+const delta = (d: number | null) =>
+  d === null ? "n/a" : `${d > 0 ? "+" : ""}${d.toFixed(Math.abs(d) < 10 ? 1 : 0)}%`;
+
+/** A replay's results against the original's: a report, not a verdict. */
+function Comparison({ c }: { c: NonNullable<NonNullable<Concept["replay"]>["comparison"]> }) {
+  return (
+    <div className="comparison">
+      <h5 className="small">Compared with the original</h5>
+      {c.files.map((f) => (
+        <div key={f.replay} className="cmp-file">
+          <div className="mono small">
+            {f.original === f.replay ? f.replay : `${f.original} → ${f.replay}`}{" "}
+            <span className={`muted cmp-${f.status}`}>
+              {f.status === "same"
+                ? "identical"
+                : f.status === "no-original"
+                  ? "not in the original"
+                  : f.status === "no-replay"
+                    ? "not produced"
+                    : f.values?.length
+                      ? ""
+                      : "changed"}
+            </span>
+          </div>
+          {f.values && f.values.length > 0 && (
+            <table className="cmp-table small">
+              <thead>
+                <tr>
+                  <th />
+                  <th>original</th>
+                  <th>replay</th>
+                  <th>change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {f.values.map((v) => (
+                  <tr key={v.name}>
+                    <td>{v.name}</td>
+                    <td className="mono">{num(v.original)}</td>
+                    <td className="mono">{num(v.replay)}</td>
+                    <td
+                      className={`mono ${v.deltaPct === null || v.deltaPct === 0 ? "" : v.deltaPct > 0 ? "up" : "down"}`}
+                    >
+                      {delta(v.deltaPct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
