@@ -16,6 +16,7 @@
     "bench:snapshot": "pnpm build && node scripts/bench-snapshot.mjs",
     "demo": "pnpm build && node scripts/demo.mjs",
     "e2e": "pnpm build && node scripts/e2e-real.mjs",
+    "e2e:rewind": "pnpm build && node scripts/e2e-rewind.mjs",
     "docker:build": "pnpm build && node scripts/docker-build.mjs",
     "docker:smoke": "node scripts/docker-smoke.mjs",
     "demo:ui": "pnpm build && node scripts/demo.mjs --ui",

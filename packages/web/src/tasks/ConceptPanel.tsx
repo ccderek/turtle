@@ -4,6 +4,7 @@ import { ago } from "../format.js";
 import { CheckSection, LessonChecks, TaskChecks } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
 import { RecipeCard, ReplayInfo, TaskRecipes } from "./Recipes.js";
+import { ShareDialog } from "./Share.js";
 import type { GraphCtx } from "./TasksView.js";
 import { TaskCode, TaskConversation, TaskOutputs } from "./TaskTabs.js";
 import { evidenceCount, lessonsFor } from "./tree.js";
@@ -42,6 +43,7 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
   const lessons = lessonsFor(ctx.byId, ctx.kids, c.id).filter((l) => l.id !== c.id);
   const st = TASK_STATUS[c.status ?? "todo"];
   const [tab, setTab] = useState<Tab>("overview");
+  const [sharing, setSharing] = useState(false);
   const isTask = c.kind === "task";
   const nOutputs = kids.filter((k) => k.kind === "output").length;
   const branchIds = new Set((c.branches ?? []).map((b) => b.branch));
@@ -89,6 +91,12 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
           </button>
         )}
         <EditableTitle ctx={ctx} c={c} />
+        {(c.kind === "task" || c.kind === "goal") && (
+          <button type="button" className="link small share-link" onClick={() => setSharing(true)}>
+            Share as a file…
+          </button>
+        )}
+        {sharing && <ShareDialog ctx={ctx} id={c.id} onClose={() => setSharing(false)} />}
         {isTask && (
           <div className="panel-tabs" role="tablist" aria-label="Task views">
             {tabs.map(([t, label]) => (

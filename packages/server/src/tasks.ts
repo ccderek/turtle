@@ -132,7 +132,8 @@ export class TaskRunner {
 
   /** Where checks and recipes run: the sandbox agents use. */
   scripts(): ScriptSandbox {
-    return scriptSandbox(this.o.config.sandbox.mode, this.o.config.sandbox.image);
+    const mode = this.o.project.config.defaults.sandbox ?? this.o.config.sandbox.mode;
+    return scriptSandbox(mode, this.o.config.sandbox.image);
   }
 
   /**

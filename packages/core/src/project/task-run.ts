@@ -454,7 +454,18 @@ export async function startTaskRun(
     task.sources?.filter((s) => s !== primary.id),
   );
 
-  const opts: RunOptions = { prompt: "", sandbox: o.sandbox ?? deps.config.sandbox.mode };
+  // The project's defaults (turtle-project.json) win over the repository's turtle.config.json.
+  const d = project.config.defaults;
+  const config: TurtleConfig = {
+    ...deps.config,
+    sandbox: { ...deps.config.sandbox, mode: d.sandbox ?? deps.config.sandbox.mode },
+    agent: {
+      ...deps.config.agent,
+      ...(d.model ? { model: d.model } : {}),
+      ...(d.maxBudgetUsd ? { maxBudgetUsd: d.maxBudgetUsd } : {}),
+    },
+  };
+  const opts: RunOptions = { prompt: "", sandbox: o.sandbox ?? config.sandbox.mode };
   if (o.model) opts.model = o.model;
   if (o.maxBudgetUsd) opts.maxBudgetUsd = o.maxBudgetUsd;
   if (sources.companions.length && sources.primaryId) {
@@ -464,8 +475,8 @@ export async function startTaskRun(
 
   const own = task.branches?.find((b) => b.source === primary.id);
   const ownBranch = own ? db.getBranch(own.branch) : null;
-  const sandboxMode = opts.sandbox ?? deps.config.sandbox.mode;
-  const scripts = scriptSandbox(sandboxMode, deps.config.sandbox.image);
+  const sandboxMode = opts.sandbox ?? config.sandbox.mode;
+  const scripts = scriptSandbox(sandboxMode, config.sandbox.image);
   // A replay task's first run is its recipe, without a model (architecture §3.7).
   const replayFirst = !!task.replay && !ownBranch?.headNodeId;
   if (ownBranch?.headNodeId && ownBranch.status !== "running") {
@@ -521,10 +532,10 @@ export async function startTaskRun(
       {
         store,
         db,
-        config: deps.config,
+        config,
         launcher: replayFirst
           ? recipeLauncher(project, task.id, scripts)
-          : deps.launcherFor(sandboxMode, deps.config),
+          : deps.launcherFor(sandboxMode, config),
         summarizer: deps.summarizer,
         graph: binding,
         ...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}),

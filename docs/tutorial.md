@@ -351,6 +351,27 @@ Use the same `pnpm demo:ui` as Part A (start it again if you stopped it). The **
 
 ---
 
+## Part E — Your real task: the gate (M9, a week or two)
+
+This is the test that decides whether turtle moves on to parallel work and to several people (Phase 3 and 4). You work as usual; turtle measures itself from what it recorded. Nothing asks you to fill anything in, except judging three exports.
+
+1. **E1. Pick a real task.** One that takes days, where things fail and you change direction: for example the phone power measurement, or turtle itself (below).
+2. **E2. Start it.**
+   - Credentials: `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`). The audit (E5) needs `ANTHROPIC_API_KEY`.
+   - In the repository: `turtle init`, then `turtle ui`. In the project's `turtle-project.json`, under `defaults`, set a low `maxBudgetUsd` at first; use `"sandbox": "none"` when a step needs your hardware (a phone over USB).
+   - Click **New goal**. Untick *Auto-start ready tasks* if you want to start each task yourself at first.
+3. **E3. Work with it.** Answer questions in *Needs you*, tell running agents when they go the wrong way, abandon what does not work and keep the lesson, enforce the lessons that matter with a check, and let steps that work become recipes.
+4. **E4. Judge three exports.** On three tasks or goals that you would really send to someone: **Share as a file…**, download, read it, tick what is clear, and **Record my judgment** (or `turtle share <id> --judge yyyy`).
+5. **E5. Run the audit.** `turtle audit` (about $0.001 per task with Haiku) checks each finished task's findings, decisions and status against its tool log.
+6. **E6. Read the gate.** The **Gate** button, or `turtle stats --gate`. Also run `pnpm e2e:rewind` once in your turtle checkout (a few cents): it forks a real run from three checkpoints. Send the output of `turtle stats --gate`, and what got in your way.
+
+**Using turtle to build turtle.** It works, with three things to know:
+- The agents never touch your checkout or the turtle you are running: each task works in its own copy under `~/.turtle/workspaces`. To bring a result back, take its checkpoint out as a branch (`turtle export <node> --branch <name>` in the turtle repository, or the Code tab's *Save & export*), then review and merge it like any branch.
+- A fresh copy has no `node_modules`. In the turtle repository's `turtle.config.json`, set `"workspace": { "setupCommand": "pnpm install --frozen-lockfile" }` so that agents can build and run the tests. A check such as `pnpm -s typecheck && pnpm -s test` on the goal makes "done" mean "tests pass".
+- Run the turtle you use from a separate checkout (or a built copy) from the one you work on, so a half-finished change never breaks the tool you are using.
+
+---
+
 ## Part C — Optional: Docker sandbox
 
 If you install Docker Desktop or OrbStack, agents can run in containers that cannot see your `.git`. Build the runner image:
@@ -373,6 +394,7 @@ Part A:  A1 [ ]  A2 [ ]  A3 [ ]  A4 [ ]  A5 [ ]  A6 [ ]  A7 [ ]  A8 [ ]
 Part B:  U1 [ ]  U2 [ ]  U3 [ ]  U4 [ ]  U5 [ ]  U6 [ ]   B7 export [ ]   B8 doctor OK [ ]
 Part C:  (skipped / worked / problem)
 Part D:  D1 [ ]  D2 [ ]  D3 [ ]  D4 [ ]  D5 [ ]  D6 [ ]  D7 [ ]  D8 [ ]  D9 [ ]  D10 [ ]  D11 [ ]
+Part E:  task: (what)   days: (n)   exports judged: (n)   gate: (paste `turtle stats --gate`)
 
 1. Could you keep up with what the agents were doing? Where did you lose track?
 2. What did you look for on screen and not find?

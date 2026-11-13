@@ -16,6 +16,7 @@ Measured passively from what turtle records; nothing asks the human to perform.
 | G2 | **Truthful:** does the graph match what happened? | Share of findings and `done` tasks with evidence links, plus an audit model's agreement between each task's graph entries and its tool log | ≥ 90 % evidenced; ≥ 85 % audit agreement |
 | G3 | **Shareable:** does an exported brief stand on its own? | The user judges 3 exports of real tasks: is the goal clear, are the results and decisions with evidence clear, are the open questions clear? Optional proxy: a model answers the same 4 questions from the export alone | 3 of 3 judged clear; no secrets or home paths in any export |
 | G4 | **Affordable:** what does the record cost? | Tokens per finished task, graph-tool share of tokens, repeated-work rate | Reported (baseline for Phase 3); graph tools < 5 % of tokens |
+| G5 | **Reproducible** (added with hardening, architecture §3.7): do hardened steps redo themselves? | Recipes verified by a clean replay, replays that needed no model, check failures caught and then fixed | Reported (not gated in Phase 2) |
 
 Also recorded, not gated: redirect latency (instruction sent → delivered at the next tool boundary).
 
@@ -421,9 +422,10 @@ turtle check add <lesson|task|goal> --script check_oos.py [--title]   # active a
 turtle check run|list <task> · turtle check activate|retire <check>
 turtle recipe add <task> --script compile.sh --param MODEL=A --output 'build/model-${MODEL}.bin' [--tolerance 0.03]
 turtle recipe verify <recipe> · turtle recipe replay <recipe> --param MODEL=B · turtle recipe list <task>
-turtle export <task|goal> [-o file.html]
+turtle share <task|goal> [-o file.html] [--check] [--judge yyyn]   # "export" stays the Phase 0 git export
+turtle audit [--task <task>...] [--force]
 turtle undo <op>
-turtle stats --gate                        # G1–G4 (§15)
+turtle stats --gate                        # G1–G5 (§15)
 ```
 
 `turtle run` stays as a shortcut: it creates a task under the current goal (or "Ad-hoc") and starts it.
@@ -446,7 +448,18 @@ turtle stats --gate                        # G1–G4 (§15)
   - Repeated work: tasks whose tool logs re-run a command already run by a task they depend on.
 - **Redirect latency** (recorded, not gated): from `instruction_queued` to `instruction_delivered`, reported as p50/p95, with the duration of the tool that was running at the time.
 
-`turtle stats --gate` prints G1–G4 with pass/fail against §1.
+`turtle stats --gate` prints G1–G5 with pass/fail against §1.
+
+**As built (M8).**
+
+| Part | How |
+|---|---|
+| **Gate** | `computeGate` (core `project/gate.ts`) reads the project and every source's records. `turtle stats --gate [--json]` prints it; the **Gate** button in the Tasks toolbar shows it (`GET /api/gate`). Exit code 1 when a gated group fails |
+| **G1** | Declared checkpoints (agent-declared, not recipe runs) with a session and resume message ÷ all; runs started from a checkpoint (`startFrom`: new task from here, retries, replays) whose first run did not fail. `pnpm e2e:rewind` (real model, Haiku by default) makes a three-step task and forks from each checkpoint, checking that the files are restored and no finished step is written again; `--fake` runs it with a scripted agent |
+| **G2** | Findings with an evidence link; done tasks with a checkpoint link; the audit: `turtle audit` (or **Run the audit** in the Gate dialog, when `turtle ui` has an API key) sends each finished task's findings, decisions, status, brief and lessons in force, with its tool log (inputs and results, clipped, newest kept) and checkpoints, to the summarizer model, which answers supported / unsupported / contradicted per item. Audits are stored in `.git/turtle/gate/audits.json` of the project and redone when a task changes. Cost is shown against the run cost |
+| **G3** | `turtle share <task|goal>` (or **Share as a file…** in the panel) writes one HTML file (§10): briefs, findings with evidence (text and images ≤ 1 MB inlined, CSV as tables, others by path and sha256), decisions, questions, lessons, checks, recipes; never tool logs or transcripts. Home paths and secret-looking values (API keys, tokens, `*_TOKEN=…`, private keys, `Bearer …`) are redacted, and the result is scanned again (`leaks`). `--check` adds the model proxy (the four questions from the file alone); `--judge yyyn` or the dialog's four checkboxes record your judgment in `.git/turtle/gate/exports.json` |
+| **G4** | Tokens per done task (sum of the nodes' usage); the turtle-tool share is estimated from characters of tool inputs, results and agent text (the demo agent, which does little else, scores high); repeated work compares Bash commands with those of the tasks depended on |
+| **G5** | Recipe states, replay results (`replay.result`, repairs), and check results that failed at some point (from the operation log) and pass now |
 
 ## 16. Testing
 
@@ -474,7 +487,7 @@ turtle stats --gate                        # G1–G4 (§15)
 | M7 | Mind map UI: tidy tree, dependency arrows, conversation/outputs/code tabs, new task from here, dependency picker | **Done**: `pnpm ui:smoke` drives the trading and phone scenarios end to end |
 | M7.5 | Checks: lessons hardened into scripts, enforced at checkpoints (architecture §3.7) | **Done**: the trading demo's check fails, the agent fixes it, B passes; `pnpm ui:smoke` covers it |
 | M7.6 | Recipes verified by a clean replay; replay with parameters without a model; agent repair of a failed replay; scripts in the agent's sandbox; `turtle_check` helpers | **Done**: the phone demo's MODEL=B replay fails, is repaired and verifies; `pnpm ui:smoke` covers it |
-| M8 | Export (+ `--check`), `stats --gate`, `e2e:rewind`, docs + tutorial update | Gate report on the demo; tutorial Part D (task graph) |
+| M8 | Export (`turtle share`, `--check`, judgments), `stats --gate` with G5, the audit, `e2e:rewind`, Gate dialog, docs | **Done**: gate report on the demo (`pnpm ui:smoke` shares, judges and opens the gate); `e2e:rewind --fake` passes; tutorial Part E |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 
 ## 18. Known limitations and open questions

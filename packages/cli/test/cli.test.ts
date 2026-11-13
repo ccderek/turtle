@@ -9,10 +9,13 @@ import {
   git,
   HeuristicSummarizer,
   mergeConfig,
+  Project,
   type RunOptions,
   RunSession,
+  startTaskRun,
 } from "@turtle/core";
 import { describe, expect, it } from "vitest";
+import { gateCommand, shareCommand } from "../src/commands/gate.js";
 import { logCommand, showCommand, statsCommand, statusCommand } from "../src/commands/inspect.js";
 import {
   checkoutCommand,
@@ -168,5 +171,53 @@ describe("turtle CLI commands", () => {
     expect(text).toMatch(/done +[\d.]+ +\d+ +2 +2 +0/);
     expect(text).toContain("FAIL E1 ≥5 real runs finished");
     expect(text).toContain("PASS E3 snapshot p95 < 300 ms");
+  });
+
+  it("share writes a redacted HTML file and records a judgment; stats --gate reports G1–G5", async () => {
+    const { repo, ctx } = await scenario();
+    const project = await Project.ensureForRepo(ctx.store);
+    const goal = await project.createConcept({ kind: "goal", parentId: null, title: "Ship it" });
+    const task = await project.createConcept({
+      kind: "task",
+      parentId: goal.id,
+      title: "Write notes",
+      assignee: { type: "agent" },
+    });
+    const r = await startTaskRun(project, task.id, {
+      config: ctx.config,
+      summarizer: new HeuristicSummarizer(),
+      launcherFor: () =>
+        fakeLauncher(async (a) => {
+          await a.writeFile("notes.txt", "token=abcdef123456\n");
+          await a.graph("finding", { text: "Notes written", evidence: [{ path: "notes.txt" }] });
+          await a.checkpoint("Notes", "done");
+          await a.finish();
+        }),
+    });
+    await r.session.done;
+    r.close();
+    project.close();
+
+    const out = join(repo, "..", `${repo.split("/").at(-1)}-share.html`);
+    const lines = strip(await shareCommand(repo, goal.id, { output: out, judge: "yyyn" }));
+    expect(lines[0]).toContain("share.html");
+    expect(lines.join("\n")).toContain("1 goals, 1 tasks, 1 findings");
+    expect(lines.join("\n")).toContain("judgment recorded");
+    const html = await readFile(out, "utf8");
+    expect(html).toContain("Notes written");
+    await expect(shareCommand(repo, goal.id, { output: out, judge: "maybe" })).rejects.toThrow(
+      /4 letters/,
+    );
+
+    const g = await gateCommand(repo, {});
+    const text = strip(g.lines).join("\n");
+    expect(text).toContain("G1 Rewindable");
+    expect(text).toContain("Findings with evidence: 100%");
+    expect(text).toContain(
+      "Exports judged clear (goal, results, decisions, open questions): 0 of 1",
+    );
+    expect(text).toContain("G5 Reproducible");
+    const json = JSON.parse((await gateCommand(repo, { json: true })).lines[0] ?? "{}");
+    expect(json.groups).toHaveLength(6);
   });
 });

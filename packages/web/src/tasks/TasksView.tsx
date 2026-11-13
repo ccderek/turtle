@@ -12,6 +12,7 @@ import { ago } from "../format.js";
 import { ConceptPanel } from "./ConceptPanel.js";
 import { KIND_LABEL, TASK_STATUS } from "./labels.js";
 import { MapView } from "./MapView.js";
+import { GateDialog } from "./Share.js";
 import { buildRows, childrenMap, evidenceCount, progress } from "./tree.js";
 
 export interface GraphCtx {
@@ -86,6 +87,7 @@ export function TasksView({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [showDropped, setShowDropped] = useState(false);
   const [newGoal, setNewGoal] = useState(false);
+  const [gate, setGate] = useState(false);
   const [seenAt, setSeenAt] = useState<string>(() => readSeen());
   const inflight = useRef(false);
   const again = useRef(false);
@@ -284,6 +286,9 @@ export function TasksView({
               ))}
             </fieldset>
           )}
+          <button type="button" onClick={() => setGate(true)} title="The Phase 2 gate, G1–G5">
+            Gate
+          </button>
           <label className="toggle">
             <input
               type="checkbox"
@@ -365,6 +370,7 @@ export function TasksView({
         </aside>
       )}
       {newGoal && <NewGoalDialog ctx={ctx} onClose={() => setNewGoal(false)} />}
+      {gate && <GateDialog ctx={ctx} onClose={() => setGate(false)} />}
     </div>
   );
 }

@@ -149,4 +149,16 @@ describe("checks (hardened lessons, architecture §3.7)", () => {
     expect(Object.keys(t?.checkResults ?? {})).toHaveLength(1);
     expect(project.checksInScope(a.id)).toHaveLength(1);
   });
+
+  it("applies the project's defaults to task runs (model, budget)", async () => {
+    const { project, run, signal } = await setup();
+    project.config.defaults.maxBudgetUsd = 0.5;
+    project.config.defaults.model = "claude-haiku-5-5";
+    let options: Record<string, unknown> = {};
+    await run(signal.id, async (a) => {
+      options = a.options as unknown as Record<string, unknown>;
+      await a.finish();
+    });
+    expect(options).toMatchObject({ maxBudgetUsd: 0.5, model: "claude-haiku-5-5" });
+  });
 });

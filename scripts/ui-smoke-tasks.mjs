@@ -185,6 +185,29 @@ try {
   await shot("12-enforced");
   await closePanel();
 
+  step("share the phone goal as a file and judge it; the gate");
+  await page.locator(".map-goal", { hasText: "Measure power and performance" }).click();
+  await page.getByRole("button", { name: "Share as a file…" }).click();
+  await page.locator(".share-dialog a.button", { hasText: "Download" }).waitFor(long);
+  for (const box of await page.locator(".share-dialog .judge input[type=checkbox]").all())
+    await box.check();
+  await shot("12b-share");
+  await page.getByRole("button", { name: "Record my judgment" }).click();
+  await page.locator(".share-dialog").waitFor({ state: "detached", timeout: 10_000 });
+  await closePanel();
+  await page.getByRole("button", { name: "Gate", exact: true }).click();
+  await page.locator(".gate-dialog .gate-group").first().waitFor(long);
+  await page.waitForFunction(
+    () =>
+      /Exports judged clear[\s\S]*?1 of 1/.test(
+        document.querySelector(".gate-dialog")?.textContent ?? "",
+      ),
+    undefined,
+    long,
+  );
+  await shot("12c-gate");
+  await page.keyboard.press("Escape");
+
   step("the outline layout, dark mode and a phone-sized screen");
   await page.getByRole("button", { name: "Outline" }).click();
   await page.waitForSelector(".outline-row");

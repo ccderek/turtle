@@ -10,6 +10,9 @@ import { type GitStore, SNAPSHOT_REF_PREFIX } from "./git/store.js";
  * Operations shared by the CLI and the web server (docs/phase1-spec.md §4). They throw
  * `OpsError` for problems the human can fix (bad name, nothing running, …).
  */
+/** Thrown when what was asked for does not exist (HTTP 404 in the server). */
+export class NotFoundError extends Error {}
+
 export class OpsError extends Error {
   constructor(message: string) {
     super(message);

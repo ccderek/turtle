@@ -9,9 +9,12 @@ import type {
   Branch,
   CheckResult,
   Concept,
+  ExportSummary,
+  GateReport,
   Link,
   NodeKind,
   NodeStatus,
+  OutputContent,
   ProjectConfig,
   SandboxMode,
   Snapshot,
@@ -205,20 +208,15 @@ export interface ConceptDetailResponse {
 }
 
 /** GET /api/outputs/:id: an output file's content, from the task's workspace or checkpoints. */
-export interface OutputContentResponse {
-  path: string;
-  size: number;
-  sha256: string;
-  /** False when only another version than the one the agent cited was found. */
-  matches: boolean;
-  /** "workspace" or the checkpoint node it was read from. */
-  at: string;
-  binary: boolean;
-  truncated: boolean;
-  text?: string;
-}
+export type OutputContentResponse = OutputContent;
 
 /** POST /api/tasks/:id/checks: the task's checks, run now in its workspace. */
 export interface CheckRunResponse {
   results: ({ checkId: string; title: string } & CheckResult)[];
 }
+
+/** GET /api/concepts/:id/export: what an export holds (`?format=html` downloads it). */
+export type ExportSummaryResponse = ExportSummary;
+
+/** GET /api/gate: the Phase 2 gate, and whether audits can run here. */
+export type GateResponse = GateReport & { auditing: boolean; canAudit: boolean };

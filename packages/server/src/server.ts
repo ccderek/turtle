@@ -3,9 +3,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import {
+  anthropicClient,
+  auditTasks,
+  buildExport,
+  computeGate,
   diffBaseOf,
   exportNode,
   type GitStore,
+  hasApiCredentials,
+  NotFoundError,
   OpsError,
   openRunSources,
   type Project,
@@ -14,7 +20,9 @@ import {
   type RunnerLauncher,
   type RunOptions,
   RunSession,
+  readOutput,
   reconcile,
+  recordJudgment,
   requestStop,
   runTaskChecks,
   type SandboxMode,
@@ -36,7 +44,6 @@ import type {
   TranscriptResponse,
 } from "./api.js";
 import { graphRoutes, RouteError } from "./graph-routes.js";
-import { readOutput } from "./outputs.js";
 import { TaskRunner } from "./tasks.js";
 import { StateBuilder, transcriptItems } from "./views.js";
 
@@ -301,6 +308,33 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
     };
   }
 
+  /** G2 audits run in the background, one batch at a time (they call a small model). */
+  let auditing = false;
+  function startAudit(project: Project): { started: boolean } {
+    if (!hasApiCredentials())
+      throw new HttpError(
+        400,
+        "the audit calls a model: start turtle ui with ANTHROPIC_API_KEY set",
+      );
+    if (auditing) return { started: false };
+    auditing = true;
+    void auditTasks(project, {
+      client: anthropicClient(),
+      model: config.checkpoint.summarizerModel,
+      prices: config.prices,
+      onAudit: (a) => {
+        log(`audit ${a.taskId}: ${(a.agreement * 100).toFixed(0)}% supported`);
+        broadcast({ type: "change" });
+      },
+    })
+      .catch((err: Error) => log(`audit failed: ${err.message}`))
+      .finally(() => {
+        auditing = false;
+        broadcast({ type: "change" });
+      });
+    return { started: true };
+  }
+
   /** Run a task's checks now, in its workspace (the Checks section's "Run now"). */
   async function runChecksNow(project: Project, taskId: string): Promise<CheckRunResponse> {
     const task = project.getConcept(taskId);
@@ -316,7 +350,10 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       project.config.sources.length > 1 ? dirname(branch.workspacePath) : branch.workspacePath;
     const runs = await runTaskChecks(project, taskId, cwd, {
       checkpointId: branch.headNodeId,
-      sandbox: scriptSandbox(config.sandbox.mode, config.sandbox.image),
+      sandbox: scriptSandbox(
+        project.config.defaults.sandbox ?? config.sandbox.mode,
+        config.sandbox.image,
+      ),
     });
     return {
       results: runs.map((r) => ({ checkId: r.check.id, title: r.check.title, ...r.result })),
@@ -340,9 +377,29 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       if (a === "agents" && b && c === "transcript")
         return json(res, transcript(b, Number(url.searchParams.get("after") ?? 0) || 0));
       if (a === "artifacts" && b && !c) return serveArtifact(res, b);
+      if (a === "concepts" && b && c === "export" && o.project) {
+        const e = await buildExport(o.project, b);
+        if (url.searchParams.get("format") === "html") {
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-disposition": `attachment; filename="${e.fileName}"`,
+            "cache-control": "no-store",
+          });
+          res.end(e.html);
+          return;
+        }
+        const { html: _html, ...summary } = e;
+        return json(res, summary);
+      }
+      if (a === "gate" && !b && o.project)
+        return json(res, {
+          ...(await computeGate(o.project)),
+          auditing,
+          canAudit: hasApiCredentials(),
+        });
       if (a === "outputs" && b && !c && o.project) {
         const primaryId = o.project.config.sources.find((s) => s.path === o.repoRoot)?.id ?? null;
-        return json(res, await readOutput(o.project, { id: primaryId, store, db }, b));
+        return json(res, await readOutput(o.project, b, { id: primaryId, store, db }));
       }
       const g = graph?.get(parts, url);
       if (g !== undefined) return json(res, g);
@@ -352,6 +409,30 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
       checkMutation(req);
       const body = await readJson(req);
       if (a === "runs" && !b) return json(res, await startRun(body as unknown as RunRequest), 201);
+      if (a === "exports" && b && c === "judge" && o.project) {
+        const project = o.project;
+        const target = project.getConcept(b);
+        if (!target) throw new HttpError(404, `unknown concept: ${b}`);
+        const cl = (body.clear ?? {}) as Record<string, unknown>;
+        const e = await buildExport(project, b);
+        await recordJudgment(project, {
+          conceptId: b,
+          title: target.title,
+          at: new Date().toISOString(),
+          by: project.identity.memberId,
+          clear: {
+            goal: cl.goal === true,
+            results: cl.results === true,
+            decisions: cl.decisions === true,
+            openQuestions: cl.openQuestions === true,
+          },
+          redactions: Object.values(e.redactions).reduce((x, y) => x + y, 0),
+          leaks: e.leaks,
+          ...(typeof body.notes === "string" && body.notes.trim() ? { notes: body.notes } : {}),
+        });
+        return json(res, { ok: true });
+      }
+      if (a === "audit" && !b && o.project) return json(res, startAudit(o.project));
       if (a === "tasks" && b && c === "checks" && o.project)
         return json(res, await runChecksNow(o.project, b));
       const g = graph ? await graph.post(parts, body) : undefined;
@@ -475,11 +556,13 @@ export async function startServer(o: ServerOptions): Promise<TurtleServer> {
         const status =
           err instanceof HttpError || err instanceof RouteError
             ? err.status
-            : err instanceof OpsError
-              ? 400
-              : err instanceof RefConflictError
-                ? 409
-                : 500;
+            : err instanceof NotFoundError
+              ? 404
+              : err instanceof OpsError
+                ? 400
+                : err instanceof RefConflictError
+                  ? 409
+                  : 500;
         if (status === 500) log(`error: ${(err as Error).stack ?? String(err)}`);
         if (res.headersSent) {
           res.end();

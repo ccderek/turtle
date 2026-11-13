@@ -22,6 +22,8 @@ import type {
   Concept,
   ConceptDetailResponse,
   DiffResponse,
+  ExportSummaryResponse,
+  GateResponse,
   GraphResponse,
   NodeDetailResponse,
   OutputContentResponse,
@@ -769,6 +771,53 @@ describe("turtle ui server", () => {
     expect(act.some((x) => x.text.startsWith('the recipe failed for "Compile (MODEL=B)"'))).toBe(
       true,
     );
+    t.project?.close();
+  });
+
+  it("exports a task or goal, records judgments, and reports the gate", async () => {
+    const t = await setup({ project: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "Ship", plan: false },
+      })
+    ).body.goal;
+    const task = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Notes", assignee: { type: "agent" } },
+      })
+    ).body;
+    t.scripts.push(async (a) => {
+      await a.writeFile("r.csv", "a,b\n1,2\n");
+      await a.graph("finding", { text: "Two columns", evidence: [{ path: "r.csv" }] });
+      await a.checkpoint("Notes", "done");
+      await a.finish();
+    });
+    await t.api(`/api/tasks/${task.id}/start`, { method: "POST", body: {} });
+    await t.waitFor(
+      async () =>
+        (await t.api<ConceptDetailResponse>(`/api/concepts/${task.id}`)).body.concept.status ===
+        "done",
+    );
+    const summary = await t.api<ExportSummaryResponse>(`/api/concepts/${goal.id}/export`);
+    expect(summary.body).toMatchObject({
+      counts: { goals: 1, tasks: 1, findings: 1 },
+      inlined: 1,
+      leaks: [],
+    });
+    expect((summary.body as unknown as { html?: string }).html).toBeUndefined();
+    const file = await fetch(`${t.server.url}/api/concepts/${goal.id}/export?format=html`);
+    expect(file.headers.get("content-disposition")).toMatch(/attachment; filename="ship-/);
+    expect(await file.text()).toContain("<td>1</td>");
+    await t.api(`/api/exports/${goal.id}/judge`, {
+      method: "POST",
+      body: { clear: { goal: true, results: true, decisions: true, openQuestions: true } },
+    });
+    const gate = (await t.api<GateResponse>("/api/gate")).body;
+    expect(gate.groups.map((g) => g.id)).toEqual(["G1", "G2", "G3", "G4", "G5", "latency"]);
+    expect(gate.groups[2]?.metrics[0]?.display).toBe("1 of 1");
+    expect(typeof gate.canAudit).toBe("boolean");
     t.project?.close();
   });
 });

@@ -29,6 +29,8 @@ turtle task add "Data feed" && turtle task start <task>
 turtle tell <task> "Also log every trade"     # steer a running task
 turtle check add <lesson> --script check_oos.py  # harden a lesson: a script run at every checkpoint
 turtle recipe replay <recipe> --param MODEL=B    # redo a verified step with other parameters, no model
+turtle share <goal> --judge yyyy              # one HTML file to send (secrets redacted); judge it for the gate
+turtle stats --gate                           # the Phase 2 gate G1–G5 from what turtle recorded
 turtle run "Add a --json flag to the exporter"
 turtle status                                 # what is running, what waits for you
 turtle run --from <node> "Yes, pretty-print"  # answer a question / continue a branch
@@ -49,6 +51,7 @@ pnpm lint             # biome
 pnpm typecheck
 pnpm bench:snapshot   # snapshot latency on a synthetic 10k-file repo
 pnpm e2e              # real API run with Haiku: new → need_decision → continue → fork (~$0.02)
+pnpm e2e:rewind       # real API: fork from three checkpoints, check restore and no repeated steps (G1)
 pnpm docker:smoke     # docker sandbox mechanics, no API calls
 pnpm ui:smoke         # headless Chromium drives the Code and Tasks views end to end (needs a global playwright)
 pnpm --filter @turtle/web dev   # UI dev server proxying to `turtle ui --port 4317`

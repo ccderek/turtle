@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { Command } from "commander";
+import { auditCommand, gateCommand, shareCommand } from "./commands/gate.js";
 import {
   answerCommand,
   checkCommand,
@@ -349,11 +350,45 @@ program
   .command("stats")
   .description("per-run metrics; --criteria checks the Phase 0 exit criteria")
   .option("--criteria", "evaluate exit criteria E1–E6")
-  .action(async (o: { criteria?: boolean }) => {
-    const { lines, ok } = statsCommand(await openContext(cwd()), o);
+  .option("--gate", "evaluate the Phase 2 gate G1–G5 for the project")
+  .option("--json", "with --gate: the report as JSON")
+  .action(async (o: { criteria?: boolean; gate?: boolean; json?: boolean }) => {
+    const { lines, ok } = o.gate
+      ? await gateCommand(cwd(), o)
+      : statsCommand(await openContext(cwd()), o);
     print(lines);
     if (!ok) process.exitCode = 1;
   });
+
+program
+  .command("share")
+  .description(
+    "write a task or goal as one self-contained HTML file (secrets and home paths redacted)",
+  )
+  .argument("<concept>", "the task or goal")
+  .option("-o, --output <file>", "where to write it (default: <title>-<date>.html)")
+  .option("--check", "scan for leftovers and ask a model the four questions from the file alone")
+  .option(
+    "--judge <yyyy>",
+    "record your judgment for the gate: goal, results, decisions, open questions (y/n each)",
+  )
+  .option("--notes <text>", "with --judge: what was unclear")
+  .action(
+    async (ref: string, o: { output?: string; check?: boolean; judge?: string; notes?: string }) =>
+      print(await shareCommand(cwd(), ref, o)),
+  );
+
+program
+  .command("audit")
+  .description(
+    "audit finished tasks: does the record match the tool log? (gate G2, calls a small model)",
+  )
+  .option("--task <task...>", "only these tasks")
+  .option("--force", "audit again even if the task did not change")
+  .option("--model <id>", "model (default: the summarizer model)")
+  .action(async (o: { task?: string[]; force?: boolean; model?: string }) =>
+    print(await auditCommand(cwd(), o)),
+  );
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   if (err instanceof CliError) {
