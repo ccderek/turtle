@@ -231,6 +231,7 @@ The current version of a concept is the number of operations applied to it.
 |---|---|
 | no `startFrom`, never ran | **new**: each source branches from its working copy (as Phase 0 `new`; `fromHead` per project default) |
 | `startFrom` | **fork** from that checkpoint, resuming the conversation at its resume point (Phase 0 fork) |
+| no `startFrom`, never ran, exactly one upstream task (`dependsOn`), not `startFresh` | **fork** from that task's latest checkpoint in the primary source, with its files but a **new conversation** (a summary of its checkpoints is put before the prompt). The checkpoint is recorded as the task's `startFrom` when the run starts, so rewinds and chain replays see it. If the upstream task has no checkpoint (a human task), the run is **new**. The panel's *Starts from* row says which, with *start fresh instead* / *start from … instead* |
 | a branch already (answered, resumed, unpaused) | **continue** that branch |
 
 The prompt is assembled by the **context assembler** and kept compact:
@@ -511,7 +512,7 @@ turtle stats --gate                        # G1–G5 (§15)
 
 - **Scheduling needs `turtle ui`** (or explicit `turtle task start`); there is no daemon until Phase 3.
 - **No resource locks yet.** Two tasks can still use one phone at once. The UI warns when two running tasks list the same resource.
-- **Combining upstream code.** A task that depends on tasks in *different* branches of the same source starts from one of them; it gets the others' findings and outputs, not their code. Code merging is Phase 3.
+- **Combining upstream code.** A task with one upstream task starts from its latest checkpoint (§7.2). A task that depends on several tasks starts from the repository, or from the one set in `startFrom`; it gets the others' findings and outputs, not their code. Code merging is Phase 3.
 - **Hook delivery (resolved in M5).** `additionalContext` from PostToolUse does reach the model, but the model treats it as possible prompt injection and ignores instructions in it. Instructions now go in as streaming user messages (§11). An instruction that arrives exactly as the agent ends its turn relies on the runner's 3 s close delay; that path is tested with the FakeAgent, not yet live.
 - **Resources that need confirmation** (`confirm: always`, architecture D29) are recorded in Phase 2 but enforced in Phase 3, together with locks.
 - **Planner quality.** Whether agents split goals into good tasks is part of G2/G4. If not, the planner prompt becomes a configurable template.

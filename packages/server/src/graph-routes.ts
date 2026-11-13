@@ -35,6 +35,7 @@ const CREATE_FIELDS = new Set([
   "sources",
   "resources",
   "startFrom",
+  "startFresh",
   "options",
   "order",
   "lessonState",

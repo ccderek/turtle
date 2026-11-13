@@ -114,7 +114,9 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
     return;
   }
 
-  const continuing = !a.prompt.trimStart().startsWith("# Your task");
+  // A run that starts from another task's checkpoint gets a summary of it before the task.
+  const taskAt = a.prompt.search(/^# Your task/m);
+  const continuing = taskAt < 0;
   await a.edit(`notes/${slug}.md`, `# ${title}\n\nStep 1: looked at what exists.\n`);
   await listen();
   await pause();
@@ -146,7 +148,7 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
   await pause();
 
   // The task's own text (before the first "## " section) may say what to ask.
-  const own = a.prompt.split("\n\n## ")[0] ?? "";
+  const own = a.prompt.slice(Math.max(taskAt, 0)).split("\n\n## ")[0] ?? "";
   const ask = /Ask the user: (.+?)(?: \((.+)\))?$/m.exec(own);
   if (!continuing && (ask || /\?|\bwhich\b|\bshould\b/i.test(title))) {
     const text = ask?.[1] ?? "Two options fit. Keep the simple one, or try the faster one?";

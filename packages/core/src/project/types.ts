@@ -56,6 +56,11 @@ export interface ConceptFields {
   sources?: string[];
   resources?: string[];
   startFrom?: StartFrom | null;
+  /**
+   * A task with one upstream task starts from that task's latest checkpoint (its files, a
+   * new conversation) unless this is set: it then starts from the repository.
+   */
+  startFresh?: boolean;
   /** A planner task splits its goal: its agent may create tasks next to itself. */
   role?: "planner";
   /** Code branches this task's work landed on, one per source. */

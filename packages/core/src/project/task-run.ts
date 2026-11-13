@@ -510,6 +510,19 @@ export async function startTaskRun(
             : "",
         ].join("");
   } else {
+    // One upstream task: start from its latest checkpoint, with a new conversation.
+    const up = defaultUpstream(project, task);
+    if (up) {
+      const b = up.branches?.find((x) => x.source === primary.id);
+      const head = b ? db.getBranch(b.branch)?.headNodeId : null;
+      const cp = checkpointOf(db, head ? db.getNode(head) : null);
+      if (cp) {
+        opts.from = cp.id;
+        opts.fork = true;
+        opts.newConversation = true;
+        await project.updateConcept(task.id, { startFrom: { taskId: up.id, checkpointId: cp.id } });
+      }
+    }
     if (task.startFrom) {
       let nodeId = task.startFrom.checkpointId;
       if (nodeId === "latest") {
@@ -567,6 +580,18 @@ export async function startTaskRun(
       db.close();
     },
   };
+}
+
+/**
+ * The task a new task starts from by default: its only upstream task (dependency), unless
+ * it starts from a checkpoint already, starts fresh, or is a replay.
+ */
+export function defaultUpstream(project: Project, task: Concept): Concept | null {
+  if (task.startFrom || task.startFresh || task.replay || task.branches?.length) return null;
+  const deps = (task.dependsOn ?? [])
+    .map((d) => project.getConcept(d))
+    .filter((d): d is Concept => d?.kind === "task" && !d.dropped);
+  return deps.length === 1 ? (deps[0] as Concept) : null;
 }
 
 function firstLine(s: string): string {

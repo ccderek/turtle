@@ -355,6 +355,7 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
             </dd>
           </>
         )}
+        {!c.startFrom && <DefaultStart ctx={ctx} c={c} />}
         {c.branches && c.branches.length > 0 && (
           <>
             <dt>Code</dt>
@@ -918,5 +919,52 @@ function DependsOn({ ctx, c, deps }: { ctx: GraphCtx; c: Concept; deps: Concept[
         )
       )}
     </span>
+  );
+}
+
+/**
+ * Where a task with one upstream task starts: that task's latest checkpoint (its files,
+ * a new conversation), or the repository if the member chose to start fresh.
+ */
+function DefaultStart({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
+  if (c.kind !== "task" || c.replay || (c.branches ?? []).length) return null;
+  const deps = (c.dependsOn ?? [])
+    .map((d) => ctx.byId.get(d))
+    .filter((d): d is Concept => d?.kind === "task" && !d.dropped);
+  const up = deps.length === 1 ? deps[0] : undefined;
+  if (!up) return null;
+  const set = async (startFresh: boolean | null) => {
+    try {
+      await post(`/api/concepts/${c.id}`, { fields: { startFresh }, base: c.version });
+      ctx.refresh();
+    } catch (err) {
+      ctx.toast((err as Error).message, "bad");
+    }
+  };
+  return (
+    <>
+      <dt>Starts from</dt>
+      <dd className="default-start">
+        {c.startFresh ? (
+          <>
+            your repository, fresh{" "}
+            <button type="button" className="link small" onClick={() => set(null)}>
+              start from “{up.title}” instead
+            </button>
+          </>
+        ) : (
+          <>
+            the latest checkpoint of{" "}
+            <button type="button" className="link" onClick={() => ctx.select(up.id)}>
+              {up.title}
+            </button>{" "}
+            <span className="muted small">(its files, a new conversation)</span>{" "}
+            <button type="button" className="link small" onClick={() => set(true)}>
+              start fresh instead
+            </button>
+          </>
+        )}
+      </dd>
+    </>
   );
 }

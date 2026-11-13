@@ -97,6 +97,7 @@ const SET_FIELDS: readonly ConceptField[] = [
   "sources",
   "resources",
   "startFrom",
+  "startFresh",
   "branches",
   "role",
   "brief",

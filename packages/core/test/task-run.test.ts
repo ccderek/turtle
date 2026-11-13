@@ -240,4 +240,57 @@ describe("task runs and the graph tools", () => {
       lessonState: "proposed",
     });
   });
+  it("starts a task with one upstream task from its latest checkpoint, in a new conversation", async () => {
+    const { project, run, goal } = await setup();
+    const data = await project.createConcept({
+      kind: "task",
+      parentId: goal.id,
+      title: "Fetch prices",
+      assignee: { type: "agent" },
+    });
+    await run(data.id, async (a) => {
+      await a.writeFile("data/prices.csv", "day,close\n1,10\n");
+      await a.checkpoint("Fetched prices", "done");
+      await a.finish();
+    });
+    const backtest = await project.createConcept({
+      kind: "task",
+      parentId: goal.id,
+      title: "Backtest",
+      assignee: { type: "agent" },
+      dependsOn: [data.id],
+    });
+    const r = await run(backtest.id, async (a) => {
+      expect(existsSync(join(a.workspace, "data/prices.csv"))).toBe(true);
+      expect(a.prompt).toContain("Your task: Backtest");
+      await a.checkpoint("Backtested", "done");
+      await a.finish();
+    });
+    expect(r.mode).toBe("fork");
+    expect(r.out.reason).toBe("done");
+    const cp = project.db
+      .listLinks({ from: data.id, rel: "evidence" })
+      .filter((l) => l.to.type === "node")
+      .at(-1)?.to.id;
+    expect(project.getConcept(backtest.id)?.startFrom).toEqual({
+      taskId: data.id,
+      checkpointId: cp,
+    });
+
+    // Starting fresh: the repository, without the upstream task's files.
+    const fresh = await project.createConcept({
+      kind: "task",
+      parentId: goal.id,
+      title: "Backtest from scratch",
+      assignee: { type: "agent" },
+      dependsOn: [data.id],
+      startFresh: true,
+    });
+    await run(fresh.id, async (a) => {
+      expect(existsSync(join(a.workspace, "data/prices.csv"))).toBe(false);
+      await a.checkpoint("Started over", "done");
+      await a.finish();
+    });
+    expect(project.getConcept(fresh.id)?.startFrom ?? null).toBeNull();
+  });
 });

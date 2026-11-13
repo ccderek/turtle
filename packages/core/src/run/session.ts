@@ -63,6 +63,8 @@ export interface RunOptions {
   from?: string;
   /** Always create a new branch, even from a branch head. */
   fork?: boolean;
+  /** With `fork`: take the node's files but start a new conversation (a summary instead). */
+  newConversation?: boolean;
   /** New branch from HEAD, ignoring uncommitted changes. */
   fromHead?: boolean;
   name?: string;
@@ -375,7 +377,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         headNode = from;
         await store.materialize(from.commitSha, workspace, store.indexFileFor(branchId));
         await copyIgnored(store.topLevel, workspace, config.workspace.copyIgnored);
-        if (from.sessionId && from.resumeMessageUuid) {
+        if (!opts.newConversation && from.sessionId && from.resumeMessageUuid) {
           resume = {
             resume: from.sessionId,
             resumeSessionAt: from.resumeMessageUuid,
