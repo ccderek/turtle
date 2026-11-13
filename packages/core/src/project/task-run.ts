@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import type { GraphOp, GraphReply } from "@turtle/protocol";
+import type { EffortLevel, GraphOp, GraphReply } from "@turtle/protocol";
 import type { TurtleConfig } from "../config.js";
 import { TurtleDb } from "../db/db.js";
 import type { SandboxMode, TurtleNode } from "../db/types.js";
@@ -436,7 +436,13 @@ export async function startTaskRun(
   project: Project,
   taskId: string,
   deps: TaskRunDeps,
-  o: { instruction?: string; sandbox?: SandboxMode; model?: string; maxBudgetUsd?: number } = {},
+  o: {
+    instruction?: string;
+    sandbox?: SandboxMode;
+    model?: string;
+    effort?: EffortLevel;
+    maxBudgetUsd?: number;
+  } = {},
 ): Promise<TaskRun> {
   const task = project.getConcept(taskId);
   if (task?.kind !== "task") throw new OpsError(`${taskId} is not a task`);
@@ -462,11 +468,13 @@ export async function startTaskRun(
     agent: {
       ...deps.config.agent,
       ...(d.model ? { model: d.model } : {}),
+      ...(d.effort ? { effort: d.effort } : {}),
       ...(d.maxBudgetUsd ? { maxBudgetUsd: d.maxBudgetUsd } : {}),
     },
   };
   const opts: RunOptions = { prompt: "", sandbox: o.sandbox ?? config.sandbox.mode };
   if (o.model) opts.model = o.model;
+  if (o.effort) opts.effort = o.effort;
   if (o.maxBudgetUsd) opts.maxBudgetUsd = o.maxBudgetUsd;
   if (sources.companions.length && sources.primaryId) {
     opts.companions = sources.companions;

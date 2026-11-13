@@ -8,6 +8,7 @@ import type {
   CheckpointRequest,
   CheckpointStatus,
   DiffReply,
+  EffortLevel,
   FromRunner,
   GraphOp,
   GraphReply,
@@ -67,6 +68,7 @@ export interface RunOptions {
   name?: string;
   sandbox?: SandboxMode;
   model?: string;
+  effort?: EffortLevel;
   maxBudgetUsd?: number;
   /**
    * More source repositories for a multi-source run (docs/phase2-spec.md §7.1). The
@@ -461,6 +463,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         prompt: opts.prompt,
         resumed: Boolean(resume.resume),
         maxBudgetUsd: opts.maxBudgetUsd ?? config.agent.maxBudgetUsd ?? null,
+        effort: opts.effort ?? config.agent.effort ?? null,
         ...(multi
           ? {
               primarySource: primaryId,
@@ -498,6 +501,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     };
     const model = opts.model ?? config.agent.model;
     if (model) startOptions.model = model;
+    const effort = opts.effort ?? config.agent.effort;
+    if (effort) startOptions.effort = effort;
     if (config.agent.maxTurns) startOptions.maxTurns = config.agent.maxTurns;
     const budget = opts.maxBudgetUsd ?? config.agent.maxBudgetUsd;
     if (budget) startOptions.maxBudgetUsd = budget;

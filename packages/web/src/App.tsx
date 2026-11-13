@@ -257,7 +257,7 @@ export function App() {
           <span>
             <b>{waiting}</b> need you
           </span>
-          <span>
+          <span title="At API prices (config prices): what the SDK reports when a run ends, estimated from token usage while it runs. With a Claude subscription token you are not billed per token; it shows how much of your plan's usage the work took.">
             <b>${state.totals.costUsd.toFixed(2)}</b> spent
           </span>
         </div>

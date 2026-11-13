@@ -1571,7 +1571,7 @@ textarea {
   gap: 8px;
 }
 .stack textarea,
-.stack input {
+.stack input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%;
 }
 .field {
@@ -2154,6 +2154,33 @@ a.button.primary {
 .gate-fail,
 .badge.gate-fail {
   color: var(--bad);
+}
+
+/* agent settings */
+.effort-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--muted);
+}
+.effort-pick select {
+  font-size: 13px;
+  padding: 2px 4px;
+}
+fieldset.effort-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px 8px;
+  margin: 0;
+}
+fieldset.effort-list .check {
+  align-items: flex-start;
+  margin: 3px 0;
+}
+fieldset.effort-list legend {
+  font-size: 13px;
+  padding: 0 4px;
 }
 
 @media (max-width: 1100px) {

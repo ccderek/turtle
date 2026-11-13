@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { type Concept, type ConceptDetailResponse, get, post } from "../api.js";
 import { ago } from "../format.js";
+import { EffortSelect } from "./Agents.js";
 import { CheckSection, LessonChecks, TaskChecks } from "./Checks.js";
 import { TASK_STATUS } from "./labels.js";
 import { RecipeCard, ReplayInfo, TaskRecipes } from "./Recipes.js";
@@ -305,6 +306,7 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
   const [retryTitle, setRetryTitle] = useState("");
   const [subTitle, setSubTitle] = useState("");
   const [hereTitle, setHereTitle] = useState("");
+  const [effort, setEffort] = useState("");
   const hasCheckpoint = ctx.graph.links.some(
     (l) => !l.removed && l.from === c.id && l.rel === "evidence" && l.to.type === "node",
   );
@@ -432,7 +434,10 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
                 if (
                   await act(
                     `/api/tasks/${c.id}/start`,
-                    text.trim() ? { instruction: text } : {},
+                    {
+                      ...(text.trim() ? { instruction: text } : {}),
+                      ...(effort ? { effort } : {}),
+                    },
                     `${verb}ed`,
                   )
                 )
@@ -451,6 +456,12 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
                 }
               />
               <div className="composer-actions">
+                <EffortSelect
+                  id={`effort-${c.id}`}
+                  value={effort}
+                  onChange={setEffort}
+                  inherit={`${ctx.defaults?.effort ?? "default"} (project)`}
+                />
                 <button type="submit" className="primary">
                   {verb}
                 </button>

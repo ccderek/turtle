@@ -9,8 +9,13 @@ export const PROTOCOL_VERSION = 1;
 export type CheckpointStatus = "progress" | "done" | "blocked" | "need_decision";
 export type PermissionMode = "bypassPermissions" | "acceptEdits";
 
+/** How much the model thinks (the Agent SDK's `effort`). */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export const EFFORT_LEVELS: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
 export interface RunnerStartOptions {
   model?: string;
+  effort?: EffortLevel;
   systemPromptAppend: string;
   /** SDK session id to resume. */
   resume?: string;

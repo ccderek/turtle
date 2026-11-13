@@ -17,6 +17,7 @@ import {
   uiOwnerFileFor,
   verifyRecipe,
 } from "@turtle/core";
+import type { EffortLevel } from "@turtle/protocol";
 
 export interface TaskRunnerOptions {
   project: Project;
@@ -38,6 +39,7 @@ export interface StartTaskOptions {
   instruction?: string;
   sandbox?: SandboxMode;
   model?: string;
+  effort?: EffortLevel;
   budget?: number;
 }
 
@@ -99,6 +101,7 @@ export class TaskRunner {
           ...(s.instruction ? { instruction: s.instruction } : {}),
           ...(s.sandbox ? { sandbox: s.sandbox } : {}),
           ...(s.model ? { model: s.model } : {}),
+          ...(s.effort ? { effort: s.effort } : {}),
           ...(s.budget ? { maxBudgetUsd: s.budget } : {}),
         },
       );

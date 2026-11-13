@@ -820,4 +820,23 @@ describe("turtle ui server", () => {
     expect(typeof gate.canAudit).toBe("boolean");
     t.project?.close();
   });
+
+  it("sets the project's agent defaults (model, thinking effort)", async () => {
+    const t = await setup({ project: true });
+    const r = await t.api<Record<string, unknown>>("/api/project/defaults", {
+      method: "POST",
+      body: { model: "claude-sonnet-5-5", effort: "xhigh" },
+    });
+    expect(r.body).toMatchObject({ model: "claude-sonnet-5-5", effort: "xhigh" });
+    expect(
+      (await t.api("/api/project/defaults", { method: "POST", body: { effort: "huge" } })).status,
+    ).toBe(400);
+    const p = await t.api<{ defaults: Record<string, unknown> }>("/api/project");
+    expect(p.body.defaults).toMatchObject({ effort: "xhigh" });
+    await t.api("/api/project/defaults", { method: "POST", body: { effort: null } });
+    expect(
+      (await t.api<{ defaults: Record<string, unknown> }>("/api/project")).body.defaults.effort,
+    ).toBeUndefined();
+    t.project?.close();
+  });
 });

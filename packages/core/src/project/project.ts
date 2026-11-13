@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { EFFORT_LEVELS, type EffortLevel } from "@turtle/protocol";
 import { git } from "../git/exec.js";
 import { GitStore } from "../git/store.js";
 import { newId } from "../ids.js";
@@ -45,6 +46,8 @@ export interface ProjectConfig {
   defaults: {
     sandbox?: "none" | "docker";
     model?: string;
+    /** Thinking effort for agents: low | medium | high | xhigh | max. */
+    effort?: EffortLevel;
     maxParallel?: number;
     maxBudgetUsd?: number;
     planOnGoal?: boolean;
@@ -245,6 +248,32 @@ export class Project {
 
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Change the project's defaults (turtle-project.json, committed). `null` removes a
+   * value, so the repository's turtle.config.json (or the model's default) applies again.
+   */
+  async setDefaults(
+    patch: { [K in keyof ProjectConfig["defaults"]]?: ProjectConfig["defaults"][K] | null },
+  ): Promise<ProjectConfig["defaults"]> {
+    if (patch.effort && !EFFORT_LEVELS.includes(patch.effort))
+      throw new OpsError(`effort is one of ${EFFORT_LEVELS.join(", ")}`);
+    if (
+      patch.model !== undefined &&
+      patch.model !== null &&
+      !/^[\w.:@/-]{1,100}$/.test(patch.model)
+    )
+      throw new OpsError("not a model id");
+    const next: Record<string, unknown> = { ...this.config.defaults };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      if (v === null || v === "") delete next[k];
+      else next[k] = v;
+    }
+    this.config.defaults = next as ProjectConfig["defaults"];
+    await writeConfig(this.dir, this.config, this.identity, "Change project defaults");
+    return this.config.defaults;
   }
 
   async addSource(path: string, id?: string): Promise<SourceConfig> {

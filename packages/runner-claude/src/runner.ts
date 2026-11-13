@@ -224,6 +224,7 @@ export class ClaudeRunner {
     if (o.permissionMode === "bypassPermissions") options.allowDangerouslySkipPermissions = true;
     if (o.allowedTools) options.allowedTools = o.allowedTools;
     if (o.model) options.model = o.model;
+    if (o.effort) options.effort = o.effort;
     if (o.maxTurns) options.maxTurns = o.maxTurns;
     if (o.maxBudgetUsd) options.maxBudgetUsd = o.maxBudgetUsd;
     if (o.resume) options.resume = o.resume;

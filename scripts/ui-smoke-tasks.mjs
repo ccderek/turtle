@@ -208,6 +208,14 @@ try {
   await shot("12c-gate");
   await page.keyboard.press("Escape");
 
+  step("agent settings: model and thinking effort for the project");
+  await page.getByRole("button", { name: /^Agents:/ }).click();
+  await page.locator("dialog select#agents-model").selectOption("claude-sonnet-5-5");
+  await page.locator("dialog fieldset.effort-list label", { hasText: "xhigh" }).click();
+  await shot("12d-agents");
+  await page.locator("dialog button[type=submit]", { hasText: "Save" }).click();
+  await page.getByRole("button", { name: "Agents: Sonnet 5.5 · xhigh" }).waitFor(long);
+
   step("the outline layout, dark mode and a phone-sized screen");
   await page.getByRole("button", { name: "Outline" }).click();
   await page.waitForSelector(".outline-row");

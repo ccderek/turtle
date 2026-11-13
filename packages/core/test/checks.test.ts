@@ -153,12 +153,19 @@ describe("checks (hardened lessons, architecture §3.7)", () => {
   it("applies the project's defaults to task runs (model, budget)", async () => {
     const { project, run, signal } = await setup();
     project.config.defaults.maxBudgetUsd = 0.5;
-    project.config.defaults.model = "claude-haiku-5-5";
+    await project.setDefaults({ model: "claude-haiku-5-5", effort: "low" });
+    await expect(project.setDefaults({ effort: "huge" as "low" })).rejects.toThrow(
+      /effort is one of/,
+    );
     let options: Record<string, unknown> = {};
     await run(signal.id, async (a) => {
       options = a.options as unknown as Record<string, unknown>;
       await a.finish();
     });
-    expect(options).toMatchObject({ maxBudgetUsd: 0.5, model: "claude-haiku-5-5" });
+    expect(options).toMatchObject({ maxBudgetUsd: 0.5, model: "claude-haiku-5-5", effort: "low" });
+    // null removes a default; the file is committed in the project repository.
+    await project.setDefaults({ effort: null });
+    expect(project.config.defaults.effort).toBeUndefined();
+    expect(project.config.defaults.model).toBe("claude-haiku-5-5");
   });
 });

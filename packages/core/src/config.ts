@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { EffortLevel } from "@turtle/protocol";
 import type { SandboxMode } from "./db/types.js";
 
 export interface RulesConfig {
@@ -22,6 +23,8 @@ export interface TurtleConfig {
   agent: {
     adapter: string;
     model?: string;
+    /** Thinking effort: low | medium | high | xhigh | max (default: the model's). */
+    effort?: EffortLevel;
     maxTurns?: number;
     maxBudgetUsd?: number;
     allowedTools: string[];

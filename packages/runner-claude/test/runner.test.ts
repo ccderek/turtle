@@ -281,7 +281,7 @@ async function runWith(
       workspaceRoot: join(env.dir, "..", `${env.dir.split("/").pop()}-ws`),
       launcher: claudeLauncher(sdk),
     },
-    { prompt: opts.prompt ?? "Do the thing" },
+    { prompt: opts.prompt ?? "Do the thing", effort: "high" },
   );
   return { ...env, session, seen, outcome: await session.done };
 }
@@ -309,6 +309,7 @@ describe("ClaudeRunner with a mocked SDK", () => {
       cwd: session.workspace,
       permissionMode: "acceptEdits",
       model: "claude-opus-5-5",
+      effort: "high",
       systemPrompt: { type: "preset", preset: "claude_code" },
     });
     expect((seen.options?.systemPrompt as { append?: string } | undefined)?.append).toContain(

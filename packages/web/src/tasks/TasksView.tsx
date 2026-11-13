@@ -5,10 +5,12 @@ import {
   type Concept,
   type GraphResponse,
   get,
+  type ProjectResponse,
   post,
   type StateResponse,
 } from "../api.js";
 import { ago } from "../format.js";
+import { AgentSettingsDialog, modelName } from "./Agents.js";
 import { ConceptPanel } from "./ConceptPanel.js";
 import { KIND_LABEL, TASK_STATUS } from "./labels.js";
 import { MapView } from "./MapView.js";
@@ -32,6 +34,8 @@ export interface GraphCtx {
   /** A task whose "add a subtask" box should take the cursor (the map's ＋). */
   addUnder: string | null;
   setAddUnder: (id: string | null) => void;
+  /** The project's defaults (model, thinking effort, …). */
+  defaults: ProjectResponse["defaults"] | null;
 }
 
 interface Props {
@@ -82,6 +86,8 @@ export function TasksView({
   const layout: Layout = narrow ? "outline" : layoutPref;
   const [addUnder, setAddUnder] = useState<string | null>(null);
   const [graph, setGraph] = useState<GraphResponse | null>(null);
+  const [project, setProject] = useState<ProjectResponse | null>(null);
+  const [agents, setAgents] = useState(false);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -101,12 +107,14 @@ export function TasksView({
     try {
       do {
         again.current = false;
-        const [g, a] = await Promise.all([
+        const [g, a, p] = await Promise.all([
           get<GraphResponse>("/api/graph"),
           get<ActivityItem[]>("/api/activity?limit=40"),
+          get<ProjectResponse>("/api/project").catch(() => null),
         ]);
         setGraph(g);
         setActivity(a);
+        if (p) setProject(p);
         setError(null);
       } while (again.current);
     } catch (err) {
@@ -154,6 +162,7 @@ export function TasksView({
     codeShort,
     addUnder,
     setAddUnder,
+    defaults: project?.defaults ?? null,
   };
   const toggleFold = (id: string) =>
     setCollapsed((s) => {
@@ -286,6 +295,14 @@ export function TasksView({
               ))}
             </fieldset>
           )}
+          <button
+            type="button"
+            onClick={() => setAgents(true)}
+            title="Model and thinking effort for this project's agents"
+          >
+            Agents: {modelName(project?.defaults.model)} ·{" "}
+            {project?.defaults.effort ?? "default thinking"}
+          </button>
           <button type="button" onClick={() => setGate(true)} title="The Phase 2 gate, G1–G5">
             Gate
           </button>
@@ -371,6 +388,7 @@ export function TasksView({
       )}
       {newGoal && <NewGoalDialog ctx={ctx} onClose={() => setNewGoal(false)} />}
       {gate && <GateDialog ctx={ctx} onClose={() => setGate(false)} />}
+      {agents && <AgentSettingsDialog ctx={ctx} onClose={() => setAgents(false)} />}
     </div>
   );
 }

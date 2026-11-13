@@ -7,6 +7,7 @@ import {
   stopTask,
   tellTask,
 } from "@turtle/core";
+import { EFFORT_LEVELS, type EffortLevel } from "@turtle/protocol";
 import type { ActivityItem, ConceptDetailResponse, GraphResponse, ProjectResponse } from "./api.js";
 import type { TaskRunner } from "./tasks.js";
 
@@ -342,6 +343,12 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
         return { decision: d, started };
       }
       if (a === "ops" && b && c === "undo") return { undone: (await project.undo(b)).length };
+      if (a === "project" && b === "defaults" && !c) {
+        const patch: Record<string, unknown> = {};
+        for (const k of ["model", "effort"] as const)
+          if (k in body) patch[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
+        return project.setDefaults(patch);
+      }
       if (a === "scheduler" && !b) {
         const t = needTasks();
         if (typeof body.autoStart === "boolean") t.autoStart = body.autoStart;
@@ -360,6 +367,10 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
               : {}),
             ...(typeof body.model === "string" && body.model.trim()
               ? { model: body.model.trim() }
+              : {}),
+            ...(typeof body.effort === "string" &&
+            EFFORT_LEVELS.includes(body.effort as EffortLevel)
+              ? { effort: body.effort as EffortLevel }
               : {}),
             ...(typeof body.budget === "number" && body.budget > 0 ? { budget: body.budget } : {}),
           });

@@ -329,6 +329,8 @@ Every delivery is an event (`instruction_queued`, `instruction_delivered` with t
 
 CLI: `turtle task abandon <task> [--lesson "<text>"] [--on <node>]` and `turtle task retry <node> "<title>" [--from <checkpoint>]`. UI: **Abandon…** on a task opens the drafted lesson for editing; **Try another way from here** on the parent.
 
+**Model and thinking effort.** `defaults.model` and `defaults.effort` in turtle-project.json (`low`, `medium`, `high`, `xhigh`, `max`; the Agent SDK's `effort`) apply to every task run, over the repository's `agent.model` / `agent.effort` in turtle.config.json. The **Agents** button in the Tasks toolbar sets them (`POST /api/project/defaults`, `null` removes one); the *Thinking* picker next to **Start** / **Continue** overrides the effort for one run (`POST /api/tasks/:id/start {effort}`). The effort is recorded in the run's `run_start` event. Costs shown in the UI are API-price estimates: the SDK's reported cost when a run ends, the token usage times `prices` while it runs; with a subscription token they measure plan usage, not a bill.
+
 ### 11.2 Checks: hardened lessons (M7.5, architecture §3.7, D31)
 
 A lesson in the prompt is advice. A **check** is a script turtle runs, so a lesson that can be tested becomes a rule.
