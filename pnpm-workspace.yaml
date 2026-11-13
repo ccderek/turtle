@@ -1,5 +1,7 @@
 packages:
   - "packages/*"
 
-onlyBuiltDependencies:
+# better-sqlite3 ships prebuilt binaries for macOS, Linux and Windows (x64 and arm64) and
+# loads them directly; compiling it with node-gyp is not needed and fails without Xcode.
+ignoredBuiltDependencies:
   - better-sqlite3

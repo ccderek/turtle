@@ -59,7 +59,7 @@ git checkout claude/ai-vcs-architecture-discussion-mkf8dd
 pnpm install && pnpm build
 ```
 
-`pnpm install` downloads dependencies, including a prebuilt SQLite module for your Mac. If it fails with a compiler error, see Troubleshooting. `pnpm build` compiles everything, including the web client.
+`pnpm install` downloads dependencies, including SQLite already compiled for your Mac; nothing is compiled on your machine. `pnpm build` compiles everything, including the web client.
 
 Make a `turtle` command:
 
@@ -413,7 +413,7 @@ For bugs, also attach:
 
 | Symptom | Fix |
 |---|---|
-| `pnpm install` fails building `better-sqlite3` | Run `xcode-select --install`, then `pnpm install` again. Use Node 22 or 24, not an odd-numbered release |
+| `pnpm install` fails at `better-sqlite3: Running install script` | Your checkout is older than this fix: `git pull`, then `rm -rf node_modules && pnpm install`. better-sqlite3 ships compiled binaries and no longer needs a compiler |
 | A run fails at once with "Not logged in" or "authentication" | The agent sees no credentials. Run `echo $CLAUDE_CODE_OAUTH_TOKEN` in the terminal that runs `turtle ui`, then restart `turtle ui` after `source ~/.zshrc` |
 | "port 4317 is in use" | Another `turtle ui` is running. Stop it or use `turtle ui --port 4318` |
 | The page says *offline* | The `turtle ui` process stopped. Start it again; the page reconnects by itself |
