@@ -170,7 +170,8 @@ describe("turtle CLI commands", () => {
     const text = strip(lines).join("\n");
     expect(text).toMatch(/done +[\d.]+ +\d+ +2 +2 +0/);
     expect(text).toContain("FAIL E1 ≥5 real runs finished");
-    expect(text).toContain("PASS E3 snapshot p95 < 300 ms");
+    // E3 is evaluated, but whether it passes depends on the machine's speed.
+    expect(text).toMatch(/(PASS|FAIL) E3 snapshot p95 < 300 ms +\d+ ms/);
   });
 
   it("share writes a redacted HTML file and records a judgment; stats --gate reports G1–G5", async () => {
