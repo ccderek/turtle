@@ -2209,6 +2209,12 @@ fieldset.effort-list legend {
 .badge.mode-redo {
   color: var(--ask);
 }
+.chain-item .inline-field {
+  margin-left: 24px;
+}
+.chain-info {
+  margin: 0 0 6px;
+}
 
 @media (max-width: 1100px) {
   .tasks-layout,

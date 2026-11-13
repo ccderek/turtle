@@ -18,6 +18,17 @@ interface Plan {
   outputs: string[];
 }
 
+interface ChainLink {
+  taskId: string;
+  title: string;
+  why: string | null;
+  upstream: string[];
+  startsAfter: string | null;
+  steps: PlanStep[];
+  params: Record<string, string>;
+  recipe: { id: string; title: string } | null;
+}
+
 const MODE_LABEL: Record<PlanStep["mode"], string> = {
   apply: "apply the code change",
   recipe: "rerun the results with the recipe",
@@ -66,6 +77,44 @@ export function ReplayDialog({
       (e: Error) => setErr(e.message),
     );
   }, [c.id, nodeId]);
+  const hasUpstream = (c.dependsOn ?? []).length > 0 || !!c.startFrom;
+  const [chain, setChain] = useState<ChainLink[]>([]);
+  const [include, setInclude] = useState<Set<string>>(new Set());
+  const [upParams, setUpParams] = useState<Record<string, Record<string, string>>>({});
+  useEffect(() => {
+    if (!hasUpstream) return;
+    post<ChainLink[]>("/api/replays/chain/plan", {
+      taskId: c.id,
+      ...(nodeId ? { nodeId } : {}),
+    }).then(
+      (links) => {
+        const up = links.filter((l) => l.taskId !== c.id);
+        setChain(up);
+        setUpParams(Object.fromEntries(up.map((l) => [l.taskId, l.params])));
+      },
+      () => setChain([]),
+    );
+  }, [c.id, nodeId, hasUpstream]);
+  const chained = include.size > 0;
+  const toggle = (id: string, on: boolean) =>
+    setInclude((cur) => {
+      const n = new Set(cur);
+      // A task's own upstream tasks come with it: replaying it on stale inputs would mislead.
+      const closure = (x: string, acc: Set<string>) => {
+        acc.add(x);
+        for (const u of chain.find((l) => l.taskId === x)?.upstream ?? [])
+          if (chain.some((l) => l.taskId === u && !l.why)) closure(u, acc);
+        return acc;
+      };
+      if (on) for (const x of closure(id, new Set())) n.add(x);
+      else {
+        n.delete(id);
+        // Downstream tasks that need it go too.
+        for (const l of chain)
+          if (n.has(l.taskId) && closure(l.taskId, new Set()).has(id)) n.delete(l.taskId);
+      }
+      return n;
+    });
   const others = useMemo(
     () =>
       ctx.graph.concepts.filter(
@@ -99,6 +148,28 @@ export function ReplayDialog({
           e.preventDefault();
           setBusy(true);
           try {
+            if (chained) {
+              const made = await post<Concept[]>("/api/replays/chain", {
+                taskId: c.id,
+                nodeId,
+                onto: onto === "start" ? "start" : "repo",
+                include: [...include, c.id],
+                params: {
+                  ...Object.fromEntries([...include].map((id) => [id, upParams[id] ?? {}])),
+                  [c.id]: params,
+                },
+                next,
+              });
+              ctx.toast(
+                `Chain replay added: ${made.length} tasks, each starts when the one before is done`,
+                "ok",
+              );
+              ctx.refresh();
+              onClose();
+              const last = made.at(-1);
+              if (last) ctx.select(last.id);
+              return;
+            }
             const t = await post<Concept>("/api/replays", {
               taskId: c.id,
               nodeId,
@@ -163,7 +234,7 @@ export function ReplayDialog({
               name="onto"
               checked={onto === "task"}
               onChange={() => setOnto("task")}
-              disabled={!others.length}
+              disabled={!others.length || chained}
             />
             The latest checkpoint of another task
           </label>
@@ -184,6 +255,52 @@ export function ReplayDialog({
             </select>
           )}
         </fieldset>
+        {chain.length > 0 && (
+          <fieldset className="effort-list chain-list">
+            <legend>Upstream tasks</legend>
+            <p className="muted small">
+              Replay them first, in order, each when the one before is done. A task that started
+              from one of them starts from its replay, on the new results. Unchecked tasks are kept
+              as they are.
+            </p>
+            {chain.map((l) => (
+              <div key={l.taskId} className="chain-item">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    id={`replay-up-${l.taskId}`}
+                    checked={include.has(l.taskId)}
+                    disabled={!!l.why}
+                    onChange={(e) => toggle(l.taskId, e.target.checked)}
+                  />
+                  {l.title}{" "}
+                  <span className="muted small">
+                    {l.why
+                      ? `(cannot be replayed: ${l.why})`
+                      : `(${l.steps.length} step(s)${l.steps.some((s) => s.mode === "redo") ? ", needs an agent for its results" : ""})`}
+                  </span>
+                </label>
+                {include.has(l.taskId) &&
+                  Object.keys(l.params).map((k) => (
+                    <label key={k} className="field inline-field">
+                      <span className="mono">{k}</span>
+                      <input
+                        id={`replay-up-${l.taskId}-${k}`}
+                        className="mono"
+                        value={upParams[l.taskId]?.[k] ?? ""}
+                        onChange={(e) =>
+                          setUpParams((p) => ({
+                            ...p,
+                            [l.taskId]: { ...(p[l.taskId] ?? {}), [k]: e.target.value },
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+              </div>
+            ))}
+          </fieldset>
+        )}
         {err && <p className="bad small">{err}</p>}
         {plan && (
           <>
@@ -241,9 +358,9 @@ export function ReplayDialog({
           <button
             type="submit"
             className="primary"
-            disabled={busy || !plan || (onto === "task" && !ontoTask)}
+            disabled={busy || !plan || (onto === "task" && !ontoTask && !chained)}
           >
-            Replay
+            {chained ? `Replay ${include.size + 1} tasks` : "Replay"}
           </button>
         </div>
       </form>
@@ -271,5 +388,32 @@ export function PathReplaySteps({ c }: { c: Concept }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** On a replay that is part of a chain: the chain, in order. */
+export function ChainInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
+  const id = c.replay?.chain;
+  if (!id) return null;
+  const members = ctx.graph.concepts
+    .filter((t) => t.kind === "task" && t.replay?.chain === id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return (
+    <p className="small chain-info">
+      Chain replay:{" "}
+      {members.map((m, i) => (
+        <span key={m.id}>
+          {i > 0 && " → "}
+          {m.id === c.id ? (
+            <strong>{m.title}</strong>
+          ) : (
+            <button type="button" className="link" onClick={() => ctx.select(m.id)}>
+              {m.title}
+            </button>
+          )}{" "}
+          <span className="muted">({m.status ?? "todo"})</span>
+        </span>
+      ))}
+    </p>
   );
 }

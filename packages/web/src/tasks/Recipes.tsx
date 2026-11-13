@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { type Concept, post } from "../api.js";
 import { ago } from "../format.js";
-import { PathReplaySteps } from "./Replay.js";
+import { ChainInfo, PathReplaySteps } from "./Replay.js";
 import type { GraphCtx } from "./TasksView.js";
 
 const STATE_TONE: Record<string, string> = {
@@ -335,12 +335,15 @@ export function ReplayInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
       ? ctx.byId.get(r.parentId ?? "")
       : undefined;
   const res = spec.result;
+  const after = c.startFrom?.checkpointId === "latest" ? ctx.byId.get(c.startFrom.taskId) : null;
   const where =
     spec.onto === "repo"
       ? " on your repository as it is now"
-      : spec.onto === "checkpoint"
-        ? " on another task's checkpoint"
-        : "";
+      : after
+        ? ` on the results of “${after.title}”, once it is done`
+        : spec.onto === "checkpoint"
+          ? " on another task's checkpoint"
+          : "";
   return (
     <section className={`sec replay-info${res ? (res.ok ? " replay-ok" : " replay-bad") : ""}`}>
       <h4>Replay</h4>
@@ -364,6 +367,7 @@ export function ReplayInfo({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
           ? ": code changes applied, results rerun, no model unless a step fails."
           : ", by running its recipe first (no model)."}
       </p>
+      <ChainInfo ctx={ctx} c={c} />
       {path && <PathReplaySteps c={c} />}
       {res ? (
         <>

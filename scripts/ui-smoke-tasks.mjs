@@ -163,7 +163,9 @@ try {
   step("replay a task: same start, another parameter; the recipe reruns the results, no model");
   await open(/^Measure power and performance on the phone$/);
   await page.getByRole("button", { name: "Replay…" }).click();
-  await page.locator(".replay-dialog fieldset label", { hasText: "The same start as before" }).click();
+  await page
+    .locator(".replay-dialog fieldset label", { hasText: "The same start as before" })
+    .click();
   await page.locator(".replay-dialog #replay-param-RATE").fill("1k");
   await page.locator(".replay-dialog .replay-steps li").first().waitFor(long);
   await shot("10b-replay-dialog");
@@ -178,6 +180,25 @@ try {
   await page.locator(".replay-dialog .replay-steps li").first().waitFor(long);
   await page.locator(".replay-dialog button[type=submit]").click();
   await badge("(on your repository)", "done").waitFor({ timeout: 120_000 });
+  await closePanel();
+
+  step("replay a chain: a task with an upstream task, in order, without a model");
+  await open(/^Measure power and performance on the phone$/);
+  await page.getByRole("button", { name: "Replay…" }).click();
+  await page
+    .locator(".replay-dialog .chain-item label", { hasText: "Compile model A for the phone" })
+    .click();
+  await page.locator(".replay-dialog button[type=submit]", { hasText: "Replay 2 tasks" }).waitFor();
+  await shot("10d-chain-dialog");
+  await page.locator(".replay-dialog button[type=submit]").click();
+  await badge("Compile model A for the phone (chain)", "done").waitFor({
+    timeout: 120_000,
+  });
+  await badge("Measure power and performance on the phone (chain)", "done").waitFor({
+    timeout: 120_000,
+  });
+  await page.locator(".tasks-panel .chain-info").waitFor(long);
+  await shot("10e-chain-replayed");
   await closePanel();
 
   step("abandon a task and keep the lesson");

@@ -337,7 +337,14 @@ function TaskSection({ ctx, c, act }: { ctx: GraphCtx; c: Concept; act: Act }) {
           <>
             <dt>Starts from</dt>
             <dd>
-              checkpoint <span className="mono">{c.startFrom.checkpointId.slice(0, 8)}</span> of{" "}
+              {c.startFrom.checkpointId === "latest" ? (
+                "the latest checkpoint"
+              ) : (
+                <>
+                  checkpoint <span className="mono">{c.startFrom.checkpointId.slice(0, 8)}</span>
+                </>
+              )}{" "}
+              of{" "}
               <button
                 type="button"
                 className="link"

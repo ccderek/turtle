@@ -212,7 +212,7 @@ export function TaskCode({ ctx, c }: { ctx: GraphCtx; c: Concept }) {
   const from = c.startFrom;
   return (
     <div className="task-code">
-      {from && (
+      {from && from.checkpointId !== "latest" && (
         <p className="muted small">
           Started from checkpoint{" "}
           <button

@@ -203,7 +203,12 @@ function MapCard({
           <span className={`badge ${st.tone}`}>{st.label}</span>
           {c.role === "planner" && <span className="badge">planner</span>}
           {c.startFrom && (
-            <span className="badge mono-badge">from {c.startFrom.checkpointId.slice(0, 6)}</span>
+            <span className="badge mono-badge">
+              from{" "}
+              {c.startFrom.checkpointId === "latest"
+                ? "latest"
+                : c.startFrom.checkpointId.slice(0, 6)}
+            </span>
           )}
           {isNew && <span className="badge new">new</span>}
           {c.replay && <span className="badge mono-badge">replay</span>}

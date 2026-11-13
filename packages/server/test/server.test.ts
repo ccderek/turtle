@@ -888,4 +888,64 @@ describe("turtle ui server", () => {
     expect((await status(r.body.id)).replay?.result?.ok).toBe(true);
     t.project?.close();
   });
+  it("replays a task with its upstream tasks, in order, without a model", async () => {
+    const t = await setup({ project: true, autoStart: true });
+    const goal = (
+      await t.api<{ goal: Concept }>("/api/goals", {
+        method: "POST",
+        body: { title: "G", plan: false },
+      })
+    ).body.goal;
+    const status = async (id: string) =>
+      (await t.api<ConceptDetailResponse>(`/api/concepts/${id}`)).body.concept;
+    t.scripts.push(async (a) => {
+      await a.writeFile("data.txt", "data\n");
+      await a.checkpoint("Fetched", "done");
+      await a.finish();
+    });
+    const up = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: { kind: "task", parentId: goal.id, title: "Fetch", assignee: { type: "agent" } },
+      })
+    ).body;
+    await t.waitFor(async () => (await status(up.id)).status === "done");
+    t.scripts.push(async (a) => {
+      await a.writeFile("model.txt", "model\n");
+      await a.checkpoint("Modelled", "done");
+      await a.finish();
+    });
+    const down = (
+      await t.api<Concept>("/api/concepts", {
+        method: "POST",
+        body: {
+          kind: "task",
+          parentId: goal.id,
+          title: "Model",
+          assignee: { type: "agent" },
+          dependsOn: [up.id],
+          startFrom: { taskId: up.id, checkpointId: "latest" },
+        },
+      })
+    ).body;
+    await t.waitFor(async () => (await status(down.id)).status === "done");
+    const plan = await t.api<{ title: string; steps: unknown[] }[]>("/api/replays/chain/plan", {
+      method: "POST",
+      body: { taskId: down.id },
+    });
+    expect(plan.body.map((l) => [l.title, l.steps.length])).toEqual([
+      ["Fetch", 1],
+      ["Model", 1],
+    ]);
+    const made = await t.api<Concept[]>("/api/replays/chain", {
+      method: "POST",
+      body: { taskId: down.id, onto: "repo" },
+    });
+    expect(made.body).toHaveLength(2);
+    const [a2, b2] = made.body as [Concept, Concept];
+    await t.waitFor(async () => (await status(b2.id)).status === "done");
+    expect((await status(a2.id)).replay?.result?.ok).toBe(true);
+    expect((await status(b2.id)).replay?.result?.ok).toBe(true);
+    t.project?.close();
+  });
 });

@@ -168,14 +168,18 @@ export async function createPathReplay(
   o: {
     taskId: string;
     nodeId?: string;
-    onto: "repo" | "start" | { taskId: string };
+    /** `{ after }`: once that replay task is done, from its latest checkpoint (a chain). */
+    onto: "repo" | "start" | { taskId: string } | { after: string };
     params?: Record<string, string>;
     next?: string;
     title?: string;
     actor?: Actor;
+    dependsOn?: string[];
+    chain?: string;
+    plan?: ReplayPlan;
   },
 ): Promise<Concept> {
-  const plan = await planReplay(project, o.taskId, o.nodeId);
+  const plan = o.plan ?? (await planReplay(project, o.taskId, o.nodeId));
   const task = project.getConcept(o.taskId) as Concept;
   const params = { ...plan.params, ...(o.params ?? {}) };
   let startFrom: { taskId: string; checkpointId: string } | null = null;
@@ -183,6 +187,10 @@ export async function createPathReplay(
   if (o.onto === "start") {
     startFrom = { taskId: o.taskId, checkpointId: plan.startNodeId };
     onto = "start";
+  } else if (typeof o.onto === "object" && "after" in o.onto) {
+    // Resolved when the run starts: the upstream replay's latest checkpoint.
+    startFrom = { taskId: o.onto.after, checkpointId: "latest" };
+    onto = "checkpoint";
   } else if (typeof o.onto === "object") {
     const base = project.getConcept(o.onto.taskId);
     const cp = project.db
@@ -197,8 +205,18 @@ export async function createPathReplay(
   const changed = Object.entries(params)
     .filter(([k, v]) => plan.params[k] !== v)
     .map(([k, v]) => `${k}=${v}`);
-  const where = onto === "repo" ? "on your repository" : onto === "start" ? "" : "on another base";
-  const label = [changed.join(" "), where].filter(Boolean).join(", ") || "replay";
+  const after =
+    typeof o.onto === "object" && "after" in o.onto ? project.getConcept(o.onto.after) : null;
+  const where =
+    onto === "repo"
+      ? "on your repository"
+      : onto === "start"
+        ? ""
+        : after
+          ? `after "${after.replay?.source ? (project.getConcept(after.replay.source.taskId)?.title ?? after.title) : after.title}" is replayed`
+          : "on another base";
+  const label =
+    [changed.join(" "), o.chain ? "chain" : where].filter(Boolean).join(", ") || "replay";
   return project.createConcept(
     {
       kind: "task",
@@ -207,17 +225,157 @@ export async function createPathReplay(
       body: `Replay of "${task.title}": ${plan.steps.length} step(s) redone ${where || "from the same start"}${changed.length ? ` with ${changed.join(" ")}` : ""}.`,
       assignee: { type: "agent" },
       ...(startFrom ? { startFrom } : {}),
+      ...(o.dependsOn?.length ? { dependsOn: o.dependsOn } : {}),
       replay: {
         params,
         source: plan.source,
         onto,
         steps: plan.steps,
+        ...(o.chain ? { chain: o.chain } : {}),
         ...(plan.recipe ? { recipeId: plan.recipe.id } : {}),
         ...(o.next?.trim() ? { next: o.next.trim() } : {}),
       },
     },
     o.actor ?? project.me,
   );
+}
+
+/** One task of a chain replay. */
+export interface ChainLink {
+  taskId: string;
+  title: string;
+  /** The task's replay plan; null when it cannot be replayed (`why`). */
+  plan: ReplayPlan | null;
+  why?: string;
+  /** Upstream tasks in the chain, by the original's dependencies and start. */
+  upstream: string[];
+  /** The upstream task the original started from, when it is in the chain. */
+  startsAfter: string | null;
+}
+
+const lastCheckpoint = (project: Project, taskId: string) =>
+  project.db
+    .listLinks({ from: taskId, rel: "evidence" })
+    .filter((l) => l.to.type === "node")
+    .at(-1)?.to.id;
+
+/** A task's upstream tasks: its dependencies and the task it started from. */
+function upstreamOf(project: Project, t: Concept): string[] {
+  const ids = new Set(t.dependsOn ?? []);
+  if (t.startFrom) ids.add(t.startFrom.taskId);
+  return [...ids].filter((id) => {
+    const u = project.getConcept(id);
+    return u?.kind === "task" && !u.dropped;
+  });
+}
+
+/**
+ * A task and every task upstream of it (dependencies, and the task it started from),
+ * oldest first: what a chain replay redoes (architecture §3.7). An upstream task replays
+ * up to the checkpoint its downstream task started from, or its latest one.
+ */
+export async function planChain(
+  project: Project,
+  taskId: string,
+  nodeId?: string,
+): Promise<ChainLink[]> {
+  requireSingleSource(project);
+  const target = project.getConcept(taskId);
+  if (target?.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+  // Depth-first, upstream before downstream.
+  const order: Concept[] = [];
+  const seen = new Set<string>();
+  const visit = (t: Concept) => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    for (const u of upstreamOf(project, t)) visit(project.getConcept(u) as Concept);
+    order.push(t);
+  };
+  visit(target);
+  const links: ChainLink[] = [];
+  for (const t of order) {
+    const upstream = upstreamOf(project, t);
+    const startsAfter =
+      t.startFrom && upstream.includes(t.startFrom.taskId) ? t.startFrom.taskId : null;
+    // Up to the checkpoint a downstream task started from, else the latest.
+    let node = t.id === taskId ? nodeId : undefined;
+    if (!node) {
+      const froms = order
+        .filter((d) => d.startFrom?.taskId === t.id && d.startFrom.checkpointId !== "latest")
+        .map((d) => d.startFrom?.checkpointId as string);
+      node = froms.length === 1 ? froms[0] : lastCheckpoint(project, t.id);
+    }
+    let plan: ReplayPlan | null = null;
+    let why: string | undefined;
+    if (!node) why = "it has no checkpoint (it never ran)";
+    else
+      try {
+        plan = await planReplay(project, t.id, node);
+      } catch (err) {
+        why = (err as Error).message;
+      }
+    links.push({
+      taskId: t.id,
+      title: t.title,
+      plan,
+      ...(why ? { why } : {}),
+      upstream,
+      startsAfter,
+    });
+  }
+  return links;
+}
+
+/**
+ * Replay a task with its upstream tasks (a chain): one path replay per included task, in
+ * order. A task whose original started from an included upstream task starts from that
+ * replay's latest checkpoint, once it is done; the others start on `onto`. Excluded
+ * upstream tasks are kept as they are. `next` goes to the last replay (the target's).
+ */
+export async function createChainReplay(
+  project: Project,
+  o: {
+    taskId: string;
+    nodeId?: string;
+    /** Task ids to replay; default: every task in the chain that can be. */
+    include?: string[];
+    onto: "repo" | "start";
+    /** Parameters per task id. */
+    params?: Record<string, Record<string, string>>;
+    next?: string;
+    actor?: Actor;
+  },
+): Promise<Concept[]> {
+  const links = await planChain(project, o.taskId, o.nodeId);
+  const want = new Set(o.include ?? links.map((l) => l.taskId));
+  want.add(o.taskId);
+  for (const l of links)
+    if (want.has(l.taskId) && !l.plan)
+      throw new OpsError(`"${l.title}" cannot be replayed: ${l.why ?? "no plan"}`);
+  const chain = `chain-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const replayOf = new Map<string, string>();
+  const made: Concept[] = [];
+  for (const l of links) {
+    if (!want.has(l.taskId) || !l.plan) continue;
+    const after = l.startsAfter ? replayOf.get(l.startsAfter) : undefined;
+    const deps = l.upstream.map((u) => replayOf.get(u)).filter((x): x is string => !!x);
+    const isTarget = l.taskId === o.taskId;
+    // Excluded upstream start: begin where the original began (its result is kept).
+    const onto = after ? { after } : l.startsAfter ? ("start" as const) : o.onto;
+    const r = await createPathReplay(project, {
+      taskId: l.taskId,
+      onto,
+      plan: l.plan,
+      chain,
+      ...(o.params?.[l.taskId] ? { params: o.params[l.taskId] } : {}),
+      ...(deps.length ? { dependsOn: deps } : {}),
+      ...(isTarget && o.next ? { next: o.next } : {}),
+      ...(o.actor ? { actor: o.actor } : {}),
+    });
+    replayOf.set(l.taskId, r.id);
+    made.push(r);
+  }
+  return made;
 }
 
 const fmtParams = (p: Record<string, string>) =>

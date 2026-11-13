@@ -8,8 +8,14 @@ import { GitStore } from "../src/git/store.js";
 import { assembleTaskContext } from "../src/project/context.js";
 import { Project } from "../src/project/project.js";
 import { verifyRecipe } from "../src/project/recipes.js";
-import { createPathReplay, planReplay } from "../src/project/replay.js";
+import {
+  createChainReplay,
+  createPathReplay,
+  planChain,
+  planReplay,
+} from "../src/project/replay.js";
 import { startTaskRun } from "../src/project/task-run.js";
+import type { Concept } from "../src/project/types.js";
 import { HeuristicSummarizer } from "../src/run/summarizer.js";
 import { type FakeAgent, type FakeScript, fakeLauncher } from "../src/testing/fake-runner.js";
 import { makeRepo, tempDir } from "./helpers.js";
@@ -182,5 +188,118 @@ describe("path replay (architecture §3.7)", () => {
     const { out } = await run(r.id);
     expect(out.reason).toBe("blocked");
     expect(project.getConcept(r.id)?.replay?.steps?.at(-1)?.status).toBe("handed");
+  });
+});
+
+const FETCH =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell script.
+  'set -e\nmkdir -p data\nprintf "prices from %s\\n" "${START:-2015}" > data/prices.csv\n';
+const BACKTEST =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell script.
+  'set -e\nmkdir -p out\nprintf "%s fee=%s\\n" "$(cat data/prices.csv)" "${FEE:-0.1}" > out/result.txt\n';
+
+/** Two tasks: fetch data, then a backtest that started from the fetch's checkpoint. */
+async function chainSetup() {
+  const s = await setup();
+  const { project, run } = s;
+  const fetch = await project.createConcept({
+    kind: "task",
+    parentId: s.task.parentId,
+    title: "Fetch prices",
+    assignee: { type: "agent" },
+  });
+  await run(fetch.id, async (a) => {
+    await a.writeFile("data/fetch.sh", FETCH);
+    await a.checkpoint("Add the fetch script", "progress");
+    await a.writeFile("data/prices.csv", "prices from 2015\n");
+    await a.checkpoint("Fetched prices", "done");
+    await a.graph("recipe", {
+      title: "Fetch",
+      file: "f.sh",
+      script: "bash data/fetch.sh\n",
+      params: { START: "2015" },
+      outputs: ["data/prices.csv"],
+    });
+    await a.finish();
+  });
+  const fr = project.recipesOf(fetch.id)[0];
+  if (!fr) throw new Error("no recipe");
+  expect((await verifyRecipe(project, fr.id)).ok).toBe(true);
+  const cp = project.db
+    .listLinks({ from: fetch.id, rel: "evidence" })
+    .filter((l) => l.to.type === "node")
+    .at(-1)?.to.id as string;
+  const backtest = await project.createConcept({
+    kind: "task",
+    parentId: s.task.parentId,
+    title: "Backtest",
+    assignee: { type: "agent" },
+    dependsOn: [fetch.id],
+    startFrom: { taskId: fetch.id, checkpointId: cp },
+  });
+  await run(backtest.id, async (a) => {
+    await a.writeFile("backtest.sh", BACKTEST);
+    await a.checkpoint("Add the backtest", "progress");
+    await a.writeFile("out/result.txt", "prices from 2015 fee=0.1\n");
+    await a.checkpoint("Backtested", "done");
+    await a.graph("recipe", {
+      title: "Backtest",
+      file: "b.sh",
+      script: "bash backtest.sh\n",
+      params: { FEE: "0.1" },
+      outputs: ["out/result.txt"],
+    });
+    await a.finish();
+  });
+  const br = project.recipesOf(backtest.id)[0];
+  if (!br) throw new Error("no recipe");
+  expect((await verifyRecipe(project, br.id)).ok).toBe(true);
+  return { ...s, fetch, backtest };
+}
+
+describe("chain replay (architecture §3.7)", () => {
+  it("plans a task with its upstream tasks, upstream first", async () => {
+    const { project, fetch, backtest } = await chainSetup();
+    const links = await planChain(project, backtest.id);
+    expect(links.map((l) => l.title)).toEqual(["Fetch prices", "Backtest"]);
+    expect(links[1]?.startsAfter).toBe(fetch.id);
+    expect(links[0]?.plan?.params).toEqual({ START: "2015" });
+    expect(links[1]?.plan?.steps.map((s) => s.mode)).toEqual(["apply", "recipe"]);
+  });
+
+  it("replays the chain without a model: downstream reruns on the new upstream results", async () => {
+    const { project, backtest, fetch, run, launches } = await chainSetup();
+    const made = await createChainReplay(project, {
+      taskId: backtest.id,
+      onto: "start",
+      params: { [fetch.id]: { START: "2020" }, [backtest.id]: { FEE: "0.2" } },
+    });
+    expect(made).toHaveLength(2);
+    const [f2, b2] = made as [Concept, Concept];
+    expect(b2.dependsOn).toEqual([f2.id]);
+    expect(b2.startFrom).toEqual({ taskId: f2.id, checkpointId: "latest" });
+    expect(f2.replay?.chain).toBe(b2.replay?.chain);
+    const before = launches();
+    expect((await run(f2.id)).out.reason).toBe("done");
+    const { out, ws } = await run(b2.id);
+    expect(out.reason).toBe("done");
+    expect(launches()).toBe(before);
+    expect(await readFile(join(ws, "out/result.txt"), "utf8")).toBe("prices from 2020 fee=0.2\n");
+  });
+
+  it("keeps an excluded upstream task as it was", async () => {
+    const { project, backtest, run } = await chainSetup();
+    const made = await createChainReplay(project, {
+      taskId: backtest.id,
+      include: [backtest.id],
+      onto: "repo",
+      params: { [backtest.id]: { FEE: "0.3" } },
+    });
+    expect(made).toHaveLength(1);
+    const b2 = made[0] as Concept;
+    expect(b2.replay?.onto).toBe("start");
+    const { out, ws } = await run(b2.id);
+    expect(out.reason).toBe("done");
+    expect(await readFile(join(ws, "out/result.txt"), "utf8")).toBe("prices from 2015 fee=0.3\n");
   });
 });

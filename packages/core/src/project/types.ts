@@ -142,6 +142,8 @@ export interface ReplaySpec {
   result?: { ok: boolean; output: string; at: string } | null;
   /** Agent runs started after a failed replay. */
   repairs?: number;
+  /** Chain replay: the id shared by the replays of a task and its upstream tasks. */
+  chain?: string;
 }
 
 /** One run of a check against a task's workspace (architecture §3.7). */

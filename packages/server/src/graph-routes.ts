@@ -2,9 +2,11 @@ import {
   type Actor,
   type Concept,
   type ConceptFields,
+  createChainReplay,
   createPathReplay,
   type Link,
   type Project,
+  planChain,
   planReplay,
   stopTask,
   tellTask,
@@ -113,9 +115,13 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
               : ""
           }`;
         else if (c.fields.replay?.result)
-          text = c.fields.replay.result.ok
-            ? `replayed the recipe for "${title(c.id)}" (no model)`
-            : `the recipe failed for "${title(c.id)}"`;
+          text = c.fields.replay.source
+            ? c.fields.replay.result.ok
+              ? `replayed "${title(c.id)}" without a model`
+              : `the replay of "${title(c.id)}" stopped: ${c.fields.replay.result.output}`
+            : c.fields.replay.result.ok
+              ? `replayed the recipe for "${title(c.id)}" (no model)`
+              : `the recipe failed for "${title(c.id)}"`;
         else if (c.fields.checkResults) {
           const failed = Object.entries(c.fields.checkResults).filter(([, r]) => !r.ok);
           text = failed.length
@@ -211,6 +217,43 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
 
     async post(parts: string[], body: Record<string, unknown>): Promise<unknown> {
       const [, a, b, c] = parts;
+      if (a === "replays" && b === "chain" && c === "plan") {
+        const links = await planChain(
+          project,
+          task(String(body.taskId ?? "")).id,
+          typeof body.nodeId === "string" && body.nodeId ? body.nodeId : undefined,
+        );
+        return links.map((l) => ({
+          taskId: l.taskId,
+          title: l.title,
+          why: l.why ?? null,
+          upstream: l.upstream,
+          startsAfter: l.startsAfter,
+          steps: l.plan?.steps ?? [],
+          params: l.plan?.params ?? {},
+          recipe: l.plan?.recipe ? { id: l.plan.recipe.id, title: l.plan.recipe.title } : null,
+        }));
+      }
+      if (a === "replays" && b === "chain" && !c) {
+        const params: Record<string, Record<string, string>> = {};
+        if (body.params && typeof body.params === "object")
+          for (const [id, p] of Object.entries(body.params as Record<string, unknown>)) {
+            if (!p || typeof p !== "object") continue;
+            params[id] = Object.fromEntries(
+              Object.entries(p as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+            );
+          }
+        const made = await createChainReplay(project, {
+          taskId: task(String(body.taskId ?? "")).id,
+          ...(typeof body.nodeId === "string" && body.nodeId ? { nodeId: body.nodeId } : {}),
+          ...(Array.isArray(body.include) ? { include: body.include.map(String) } : {}),
+          onto: body.onto === "start" ? "start" : "repo",
+          params,
+          ...(typeof body.next === "string" ? { next: body.next } : {}),
+        });
+        if (tasks?.autoStart) void tasks.tick();
+        return made;
+      }
       if (a === "replays" && b === "plan" && !c) {
         const plan = await planReplay(
           project,
