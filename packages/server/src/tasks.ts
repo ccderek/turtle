@@ -53,8 +53,11 @@ export class TaskRunner {
   autoStart: boolean;
   private readonly taskOfAgent = new Map<string, string>();
   private starting = new Set<string>();
-  /** Tasks answered while their run was ending: continued when it has ended. */
-  private readonly continueQueue = new Set<string>();
+  /**
+   * Tasks answered or written to while their run was ending: continued when it has ended,
+   * with the member's message when there is one.
+   */
+  private readonly continueQueue = new Map<string, string | undefined>();
   /** Recipes being verified in this process. */
   readonly verifying = new Set<string>();
   private ticking = false;
@@ -154,20 +157,28 @@ export class TaskRunner {
    * replay's recipe failed, let an agent repair it once (with auto-start on).
    */
   /** Continue `taskId` once its current run ends (an answer arrived while it was ending). */
-  continueAfterRun(taskId: string): { mode: "queued" } {
-    this.continueQueue.add(taskId);
+  continueAfterRun(taskId: string, instruction?: string): { mode: "queued" } {
+    const before = this.continueQueue.get(taskId);
+    // Two messages in the gap both reach the agent.
+    this.continueQueue.set(
+      taskId,
+      [before, instruction].filter((x): x is string => !!x).join("\n\n") || undefined,
+    );
     return { mode: "queued" };
   }
 
   private async afterRun(taskId: string): Promise<void> {
     const { project } = this.o;
-    if (this.continueQueue.delete(taskId)) {
+    if (this.continueQueue.has(taskId)) {
+      const instruction = this.continueQueue.get(taskId);
+      this.continueQueue.delete(taskId);
       const open = project.db
         .listConcepts({ parentId: taskId, kind: "question" })
         .some((q) => !q.answer && !q.dropped);
-      if (!open) {
-        await this.start(taskId).catch((err: Error) =>
-          this.o.log(`could not continue ${taskId} after the answer: ${err.message}`),
+      // A message is always delivered; an answer continues once no question is open.
+      if (instruction || !open) {
+        await this.start(taskId, instruction ? { instruction } : {}).catch((err: Error) =>
+          this.o.log(`could not continue ${taskId}: ${err.message}`),
         );
         return;
       }

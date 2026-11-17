@@ -489,8 +489,15 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
           return { task: project.getConcept(t.id), started };
         }
         if (!text) throw new RouteError(400, "text is required");
-        // Running: the message reaches the agent at its next step; otherwise it is the next turn.
-        if (runner.runningTasks().has(b)) return { told: await tellTask(project, b, text) };
+        // Running: the message reaches the agent at its next step; otherwise it is the next
+        // turn. A run that is ending can no longer be told: the message waits for its end.
+        if (runner.runningTasks().has(b)) {
+          try {
+            return { told: await tellTask(project, b, text) };
+          } catch {
+            if (runner.runningTasks().has(b)) return { started: runner.continueAfterRun(b, text) };
+          }
+        }
         return { started: await runner.start(b, { instruction: text }) };
       }
       if (a === "tasks" && b) {
