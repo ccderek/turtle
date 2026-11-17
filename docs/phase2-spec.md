@@ -377,6 +377,19 @@ Not built yet: recipes in multi-source projects; thresholds on a replay's change
 
 Also fixed with it: an answer that arrives while the run that asked is ending now continues the task once that run has ended (before, the run could end "done" and the answer never reached the agent).
 
+### 11.5 Discussions (architecture §3.8, D32)
+
+| Part | As built |
+|---|---|
+| **Create** | `Project.startDiscussion({parentId?, topic, message?})` / `POST /api/discussions`: a task with `role: "discussion"`, the first message as its body. Without a parent, the topic becomes a new goal. The first turn starts at once, auto-start or not. **New discussion** in the toolbar; **Discuss…** on any goal or task |
+| **Prompt** | The task prompt gets a "## This is a discussion" section (`DISCUSSION` in `context.ts`): answer, lay out options, end the turn; do not change files unless asked; record what is settled with `decision` (with `alternatives`), what only the human decides with `question`, work with `task`; checkpoint "done" only when asked to wrap up. `graph read` says the task is a discussion |
+| **Turns** | Each turn is a run that ends with the agent's turn. `onEnd` makes it `need_decision` ("your turn") unless the agent's last *declared* checkpoint in the run was "done" (the closing auto checkpoint does not count). The brief says whose turn it is and how many decisions are settled. `POST /api/tasks/:id/say {text}` sends the member's message: told to the running agent, otherwise the next run, whose prompt is just that text (the session resumes). `POST /api/tasks/:id/wrap-up` sends `WRAP_UP` |
+| **Turn resume points** | A run's closing checkpoint now records the uuid of its last turn-ending assistant message (text, no tool call) as its resume point, so a fork from it resumes the conversation there. Before, only tool-call checkpoints had one |
+| **Branch** | `Project.branchFrom(task, checkpoint)` / `POST /api/tasks/:id/branch {checkpointId, text?}`: a sibling with the same role, `startFrom` that checkpoint, waiting for the member. A discussion forked from a turn with a resume point gets only the member's message as its prompt |
+| **Decisions** | `decision` takes `alternatives` (options not chosen, each with why), stored on the concept and listed in "Decisions already made". `taskFromDecision` / `POST /api/decisions/:id/task`: a task next to the discussion with the decision and the alternatives in its body, `provenance` to the decision. `lessonFromDecision` / `POST /api/decisions/:id/lesson`: a confirmed lesson on the discussion's parent |
+| **UI** | The *Discussion* tab: your messages and the agent's as bubbles, "Decided: …" where it recorded a decision, each turn's checkpoint with **Branch from here…**, a composer with **Send** (⌘/Ctrl+Enter) and **Wrap up**, *Settled so far* (decisions with "not: …", **Make it a lesson**, **Make it a task**) and the branches. Cards say *your turn* / *concluded* and carry a *discussion* badge |
+| **Limits** | A message sent while the agent is answering reaches it at its next step, like **Tell**. Turns of one discussion are one branch: branching is per turn, not per message within a turn |
+
 ## 12. UI
 
 The mind map becomes the home screen; the Phase 1 tree becomes the **Code** tab of a task (filtered to its checkpoints) and a global Code view.
@@ -506,6 +519,7 @@ turtle stats --gate                        # G1–G5 (§15)
 | M7.5 | Checks: lessons hardened into scripts, enforced at checkpoints (architecture §3.7) | **Done**: the trading demo's check fails, the agent fixes it, B passes; `pnpm ui:smoke` covers it |
 | M7.6 | Recipes verified by a clean replay; replay with parameters without a model; agent repair of a failed replay; scripts in the agent's sandbox; `turtle_check` helpers | **Done**: the phone demo's MODEL=B replay fails, is repaired and verifies; `pnpm ui:smoke` covers it |
 | M7.7 | Path replay: a task's steps onto your repository now, the same start or another checkpoint; code applied, results rerun; agent only for what fails; "then"; chains of dependent tasks | **Done**: `pnpm ui:smoke` replays the measurement with RATE=1k, the compile step onto the repository, and the chain compile → measure, without a model |
+| M7.8 | Discussions: turns as checkpoints, branch from a turn, decisions with alternatives, hardened into lessons and tasks | **Done**: `pnpm ui:smoke` starts a discussion, settles a decision, makes it a lesson and a task, branches from the first turn and wraps up |
 | M8 | Export (`turtle share`, `--check`, judgments), `stats --gate` with G5, the audit, `e2e:rewind`, Gate dialog, docs | **Done**: gate report on the demo (`pnpm ui:smoke` shares, judges and opens the gate); `e2e:rewind --fake` passes; tutorial Part E |
 | M9 | User acceptance on macOS: the gate (G1–G4) on a real task of the user's | Gate passed or findings recorded |
 

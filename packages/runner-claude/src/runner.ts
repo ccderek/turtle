@@ -345,8 +345,17 @@ export class ClaudeRunner {
       ),
       tool(
         "decision",
-        "Record a choice you made and why, so the human sees pivots.",
-        { text: z.string(), rationale: z.string().optional() },
+        "Record a choice and why, so the human sees pivots. In a discussion, record each thing that is settled.",
+        {
+          text: z.string(),
+          rationale: z.string().optional(),
+          alternatives: z
+            .array(z.string())
+            .optional()
+            .describe(
+              'Options considered and not chosen, each with why (e.g. "B: too slow on the phone").',
+            ),
+        },
         async (args) => call("decision", args),
       ),
       tool(

@@ -293,4 +293,87 @@ describe("task runs and the graph tools", () => {
     });
     expect(project.getConcept(fresh.id)?.startFrom ?? null).toBeNull();
   });
+  it("runs a discussion turn by turn: decisions with alternatives, wrap-up, branch, harden", async () => {
+    const { project, run } = await setup();
+    const { goal, discussion } = await project.startDiscussion({
+      topic: "How should we backtest?",
+      message: "Walk-forward or a single split?",
+    });
+    expect(goal?.title).toBe("How should we backtest?");
+    expect(discussion).toMatchObject({ role: "discussion", parentId: goal?.id });
+    const status = () => project.getConcept(discussion.id)?.status;
+
+    // Turn 1: the agent answers and ends its turn; the discussion waits for the member.
+    const t1 = await run(discussion.id, async (a) => {
+      expect(a.prompt).toContain("## This is a discussion");
+      expect(a.prompt).toContain("Walk-forward or a single split?");
+      await a.say("Walk-forward is safer against overfitting; a single split is faster.");
+      await a.finish();
+    });
+    expect(t1.out.reason).toBe("done");
+    expect(status()).toBe("need_decision");
+    const turn1 = project.db
+      .listLinks({ from: discussion.id, rel: "evidence" })
+      .filter((l) => l.to.type === "node")
+      .at(-1)?.to.id as string;
+
+    // Turn 2: the member's message is the prompt; the agent records what is settled.
+    await run(
+      discussion.id,
+      async (a) => {
+        expect(a.prompt).toBe("Walk-forward. Monthly windows.");
+        await a.graph("decision", {
+          text: "Backtest walk-forward with monthly windows",
+          rationale: "It shows how the strategy holds up over time",
+          alternatives: ["A single 70/30 split: one lucky period can hide overfitting"],
+        });
+        await a.say("Recorded.");
+        await a.finish();
+      },
+      "Walk-forward. Monthly windows.",
+    );
+    expect(status()).toBe("need_decision");
+    const decision = project.db.listConcepts({ parentId: discussion.id, kind: "decision" })[0];
+    expect(decision?.alternatives).toEqual([
+      "A single 70/30 split: one lucky period can hide overfitting",
+    ]);
+
+    // Wrap up: the agent declares done.
+    await run(
+      discussion.id,
+      async (a) => {
+        await a.checkpoint("Wrapped up: walk-forward, monthly", "done");
+        await a.finish();
+      },
+      "Wrap up.",
+    );
+    expect(status()).toBe("done");
+
+    // Branch from turn 1: the conversation resumes there with another answer.
+    const branch = await project.branchFrom(discussion.id, turn1);
+    expect(branch).toMatchObject({ role: "discussion", status: "need_decision" });
+    const b = await run(
+      branch.id,
+      async (a) => {
+        // The member's message is the next turn (after a note that the directory moved).
+        expect(a.prompt.endsWith("What if we only have two years of data?")).toBe(true);
+        expect(a.prompt).not.toContain("# Your task");
+        expect(a.options.resume).toBeTruthy();
+        expect(a.options.resumeSessionAt).toBeTruthy();
+        await a.say("Then a single split, with a final holdout.");
+        await a.finish();
+      },
+      "What if we only have two years of data?",
+    );
+    expect(b.mode).toBe("fork");
+    expect(project.getConcept(branch.id)?.status).toBe("need_decision");
+
+    // Harden the decision: a task that carries it, and a lesson for the goal.
+    const task = await project.taskFromDecision(decision?.id as string);
+    expect(task.parentId).toBe(goal?.id);
+    expect(task.body).toContain("Considered and not chosen:\n- A single 70/30 split");
+    const lesson = await project.lessonFromDecision(decision?.id as string);
+    expect(lesson).toMatchObject({ parentId: goal?.id, lessonState: "confirmed" });
+    expect(assembleTaskContext(project, task.id)).toContain("Backtest walk-forward");
+  });
 });

@@ -3,7 +3,8 @@ import { type Concept, type ConceptDetailResponse, get, post } from "../api.js";
 import { ago } from "../format.js";
 import { EffortSelect } from "./Agents.js";
 import { CheckSection, LessonChecks, TaskChecks } from "./Checks.js";
-import { TASK_STATUS } from "./labels.js";
+import { DecisionCard, DiscussionView, NewDiscussionDialog } from "./Discussion.js";
+import { statusOf, TASK_STATUS } from "./labels.js";
 import { RecipeCard, ReplayInfo, TaskRecipes } from "./Recipes.js";
 import { ReplayDialog } from "./Replay.js";
 import { ShareDialog } from "./Share.js";
@@ -11,7 +12,7 @@ import type { GraphCtx } from "./TasksView.js";
 import { TaskCode, TaskConversation, TaskOutputs } from "./TaskTabs.js";
 import { evidenceCount, lessonsFor } from "./tree.js";
 
-type Tab = "overview" | "conversation" | "outputs" | "code";
+type Tab = "discussion" | "overview" | "conversation" | "outputs" | "code";
 
 interface Props {
   ctx: GraphCtx;
@@ -43,21 +44,29 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
   const parent = c.parentId ? ctx.byId.get(c.parentId) : undefined;
   const kids = ctx.kids.get(c.id) ?? [];
   const lessons = lessonsFor(ctx.byId, ctx.kids, c.id).filter((l) => l.id !== c.id);
-  const st = TASK_STATUS[c.status ?? "todo"];
-  const [tab, setTab] = useState<Tab>("overview");
+  const st = statusOf(c);
+  const talk = c.role === "discussion";
+  const [tab, setTab] = useState<Tab>(talk ? "discussion" : "overview");
   const [sharing, setSharing] = useState(false);
+  const [talking, setTalking] = useState(false);
   const isTask = c.kind === "task";
   const nOutputs = kids.filter((k) => k.kind === "output").length;
   const branchIds = new Set((c.branches ?? []).map((b) => b.branch));
   const nCheckpoints = ctx.code.nodes.filter(
     (n) => branchIds.has(n.branchId) && n.kind !== "micro" && n.kind !== "root",
   ).length;
-  const tabs: [Tab, string][] = [
-    ["overview", "Overview"],
-    ["conversation", "Conversation"],
-    ["outputs", `Outputs${nOutputs ? ` ${nOutputs}` : ""}`],
-    ["code", `Code${nCheckpoints ? ` ${nCheckpoints}` : ""}`],
-  ];
+  const tabs: [Tab, string][] = talk
+    ? [
+        ["discussion", "Discussion"],
+        ["overview", "Overview"],
+        ["code", `Code${nCheckpoints ? ` ${nCheckpoints}` : ""}`],
+      ]
+    : [
+        ["overview", "Overview"],
+        ["conversation", "Conversation"],
+        ["outputs", `Outputs${nOutputs ? ` ${nOutputs}` : ""}`],
+        ["code", `Code${nCheckpoints ? ` ${nCheckpoints}` : ""}`],
+      ];
 
   return (
     <div className="panel-inner">
@@ -94,10 +103,16 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
         )}
         <EditableTitle ctx={ctx} c={c} />
         {(c.kind === "task" || c.kind === "goal") && (
-          <button type="button" className="link small share-link" onClick={() => setSharing(true)}>
-            Share as a file…
-          </button>
+          <div className="head-links">
+            <button type="button" className="link small" onClick={() => setTalking(true)}>
+              Discuss…
+            </button>
+            <button type="button" className="link small" onClick={() => setSharing(true)}>
+              Share as a file…
+            </button>
+          </div>
         )}
+        {talking && <NewDiscussionDialog ctx={ctx} parent={c} onClose={() => setTalking(false)} />}
         {sharing && <ShareDialog ctx={ctx} id={c.id} onClose={() => setSharing(false)} />}
         {isTask && (
           <div className="panel-tabs" role="tablist" aria-label="Task views">
@@ -115,6 +130,7 @@ export function ConceptPanel({ ctx, id, onClose }: Props) {
             ))}
           </div>
         )}
+        {isTask && tab === "discussion" && <DiscussionView ctx={ctx} c={c} />}
         {isTask && tab === "conversation" && <TaskConversation ctx={ctx} c={c} />}
         {isTask && tab === "outputs" && <TaskOutputs ctx={ctx} c={c} />}
         {isTask && tab === "code" && <TaskCode ctx={ctx} c={c} />}
@@ -168,6 +184,7 @@ function ConceptOverview({
         </>
       )}
       {c.kind === "decision" && c.body && <p className="node-body">{c.body}</p>}
+      {c.kind === "decision" && <DecisionCard ctx={ctx} d={c} />}
       {c.kind === "output" && (
         <dl className="facts">
           <dt>Path</dt>

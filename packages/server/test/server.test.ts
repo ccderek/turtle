@@ -982,4 +982,77 @@ describe("turtle ui server", () => {
     // The run ends on a closed project: its follow-up work must not throw unhandled.
     await new Promise((r) => setTimeout(r, 1500));
   });
+  it("holds a discussion: turns, a decision hardened into a lesson and a task, wrap-up, branch", async () => {
+    const t = await setup({ project: true });
+    const status = async (id: string) =>
+      (await t.api<ConceptDetailResponse>(`/api/concepts/${id}`)).body.concept;
+    const prompts: string[] = [];
+    t.scripts.push(async (a) => {
+      prompts.push(a.prompt);
+      await a.say("Two options: walk-forward or one split.");
+      await a.finish();
+    });
+    const r = await t.api<{ goal: Concept; discussion: Concept }>("/api/discussions", {
+      method: "POST",
+      body: { topic: "Backtest design", message: "How should we validate?" },
+    });
+    const id = r.body.discussion.id;
+    await t.waitFor(async () => (await status(id)).status === "need_decision");
+    expect(prompts[0]).toContain("## This is a discussion");
+
+    t.scripts.push(async (a) => {
+      prompts.push(a.prompt);
+      await a.graph("decision", {
+        text: "Walk-forward, monthly",
+        alternatives: ["One split: hides overfitting"],
+      });
+      await a.say("Recorded.");
+      await a.finish();
+    });
+    await t.api(`/api/tasks/${id}/say`, { method: "POST", body: { text: "Walk-forward." } });
+    await t.waitFor(
+      async () => prompts.length === 2 && (await status(id)).status === "need_decision",
+    );
+    expect(prompts[1]).toBe("Walk-forward.");
+    const graph = (await t.api<{ concepts: Concept[] }>("/api/graph")).body;
+    const decision = graph.concepts.find((c) => c.kind === "decision" && c.parentId === id);
+    expect(decision?.alternatives).toEqual(["One split: hides overfitting"]);
+    const lesson = await t.api<Concept>(`/api/decisions/${decision?.id}/lesson`, {
+      method: "POST",
+      body: {},
+    });
+    expect(lesson.body).toMatchObject({ kind: "lesson", parentId: r.body.goal.id });
+    const task = await t.api<Concept>(`/api/decisions/${decision?.id}/task`, {
+      method: "POST",
+      body: {},
+    });
+    expect(task.body.title).toBe("Walk-forward, monthly");
+
+    t.scripts.push(async (a) => {
+      prompts.push(a.prompt);
+      await a.checkpoint("Wrapped up", "done");
+      await a.finish();
+    });
+    await t.api(`/api/tasks/${id}/wrap-up`, { method: "POST", body: {} });
+    await t.waitFor(async () => (await status(id)).status === "done");
+    expect(prompts[2]).toContain("wrap up this discussion");
+
+    const turn1 = (await t.api<ConceptDetailResponse>(`/api/concepts/${id}`)).body.links.find(
+      (l) => l.rel === "evidence" && l.to.type === "node",
+    )?.to.id;
+    t.scripts.push(async (a) => {
+      prompts.push(a.prompt);
+      await a.say("Then one split with a holdout.");
+      await a.finish();
+    });
+    const b = await t.api<{ task: Concept }>(`/api/tasks/${id}/branch`, {
+      method: "POST",
+      body: { checkpointId: turn1, text: "Only two years of data?" },
+    });
+    await t.waitFor(
+      async () => prompts.length === 4 && (await status(b.body.task.id)).status === "need_decision",
+    );
+    expect(prompts[3]?.endsWith("Only two years of data?")).toBe(true);
+    t.project?.close();
+  });
 });

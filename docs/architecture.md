@@ -7,7 +7,7 @@
 >   - it syncs local-first like git (§3.3);
 >   - it has roles and runners (§3.4);
 >   - it is built on a small core (§3.5).
-> - v0.4 adds **hardening** (§3.7, D31): what worked and what must hold become code that turtle runs (checks, then recipes), so a replay does not depend on the agent choosing the same path.
+> - v0.4 adds **hardening** (§3.7, D31): what worked and what must hold become code that turtle runs (checks, then recipes), so a replay does not depend on the agent choosing the same path. **Discussions** (§3.8, D32) are the softest level: turns you can branch from, and decisions that keep what was not chosen.
 >
 > Items marked `TODO` are open questions.
 
@@ -259,6 +259,26 @@ On top, not in the core:
 - **The flywheel:** steps that were hardened replay for free; steps that were not are redone by an agent once, which then hardens them.
 
 **What this changes.** Checkpoints keep their exact rewind. Hardened checkpoints add a reproducible replay. Lessons become guarantees where they can be checked and stay advice where they cannot. Replays that reuse recipes spend tokens only on what is new (G4).
+
+### 3.8 Discussions: the softest level (v0.4)
+
+**The observation.** Real work starts as a conversation, not as code. Many turns change no file: they weigh options, ask, and settle things. Those decisions drive everything after them, yet a task-shaped record has no place for them, and an agent given a task assumes it should start building.
+
+**Decision (D32):** a **discussion** is a kind of task (`role: "discussion"`). The member and an agent think something through, one turn at a time:
+- **Turns are checkpoints.** Each turn ends at a checkpoint, usually with no file changed, that records where the conversation was. **Branch from here** on any turn starts a sibling discussion that resumes the conversation at that turn: the other answer you could have given.
+- **The agent talks; it does not build.** It does not change files unless asked. Each turn ends waiting for the member ("your turn"). Only the member's **Wrap up** lets it conclude. It then records what is still missing and checkpoints "done".
+- **What is settled becomes graph nodes.** Decisions are recorded **with the alternatives not chosen and why**: the part of a discussion that is lost first, and the part that stops the next person, or agent, from walking the same path again. Open questions are questions; work is tasks.
+- **Decisions harden like everything else.** This makes a discussion the softest level of §3.7:
+
+| Level | What | Enforced by |
+|---|---|---|
+| Talk | The turns of a discussion | Nothing: rewind and branch only |
+| Decision | What was settled, and what was not chosen | Every later task in scope reads it |
+| Lesson (L0) | **Make it a lesson** | In every later prompt under the goal |
+| Check (L1) | **Enforce with a check…** on the lesson | turtle, at every checkpoint |
+| Recipe (L2) | Recorded once the work runs | turtle, on replay |
+
+A decision can also become work: **Make it a task** creates a task that carries the decision and the alternatives in its prompt, linked back to the decision (`provenance`). Without a parent, a discussion's topic becomes a new goal: the tree can start from a conversation.
 
 ### Glossary
 
@@ -758,6 +778,7 @@ Only if a measured hotspot appears (e.g. snapshotting a very large monorepo). Re
 | D29 | Irreversible resources | Resources can require confirmation (`confirm: always`); agents stop and ask before using them |
 | D30 | Memory | The task graph is the memory: lessons, findings, decisions with provenance and scope; retrieval by scope (Phase 2), project search over a rebuildable index (Phase 3), shared across projects later (Phase 5) |
 | D31 | Hardening | Intent that worked and lessons that must hold become code turtle runs, in the agent's sandbox: L1 checks (scripts stored in the graph, run at every checkpoint in scope, a failing check blocks `done`; agents only propose), L2 recipes (verified by a clean replay from the checkpoint; replays with parameters run without a model, and an agent repairs only what fails), L3 policies (D29). Language-neutral contract: exit code 0 passes; Python by default, with `turtle_check` helpers for tolerances |
+| D32 | Discussions | A discussion is a task (`role: "discussion"`) the member and an agent think through turn by turn: each turn is a checkpoint (resumable, so you can branch from any turn), the agent does not change files unless asked and waits for the member, and only the member's wrap-up concludes it. What is settled is a decision with the alternatives not chosen; decisions harden into lessons, checks and tasks (§3.8) |
 
 ## 17. TODO
 

@@ -10,6 +10,7 @@ import {
   planReplay,
   stopTask,
   tellTask,
+  WRAP_UP,
 } from "@turtle/core";
 import { EFFORT_LEVELS, type EffortLevel } from "@turtle/protocol";
 import type { ActivityItem, ConceptDetailResponse, GraphResponse, ProjectResponse } from "./api.js";
@@ -105,7 +106,13 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
       } else if (c.kind === "set") {
         id = c.id;
         if (c.fields.status)
-          text = `"${title(c.id)}" → ${STATUS_TEXT[c.fields.status] ?? c.fields.status}`;
+          text = `"${title(c.id)}" → ${
+            project.getConcept(c.id)?.role === "discussion" && c.fields.status === "need_decision"
+              ? "your turn"
+              : project.getConcept(c.id)?.role === "discussion" && c.fields.status === "done"
+                ? "concluded"
+                : (STATUS_TEXT[c.fields.status] ?? c.fields.status)
+          }`;
         else if (c.fields.answer) text = `answered "${title(c.id)}": ${c.fields.answer.text}`;
         else if (c.fields.lessonState) text = `lesson "${title(c.id)}" → ${c.fields.lessonState}`;
         else if (c.fields.checkState) text = `check "${title(c.id)}" → ${c.fields.checkState}`;
@@ -442,6 +449,49 @@ export function graphRoutes(project: Project, tasks: TaskRunner | null = null) {
         if (typeof body.autoStart === "boolean") t.autoStart = body.autoStart;
         if (t.autoStart) void t.tick();
         return { autoStart: t.autoStart };
+      }
+      if (a === "discussions" && !b) {
+        const topic = String(body.topic ?? "").trim();
+        if (!topic) throw new RouteError(400, "topic is required");
+        const r = await project.startDiscussion({
+          parentId:
+            typeof body.parentId === "string" && body.parentId ? concept(body.parentId).id : null,
+          topic,
+          ...(typeof body.message === "string" ? { message: body.message } : {}),
+        });
+        // The member just wrote: the first turn starts now, auto-start or not.
+        if (tasks) await tasks.start(r.discussion.id).catch(() => {});
+        return r;
+      }
+      if (a === "decisions" && b && (c === "task" || c === "lesson")) {
+        if (concept(b).kind !== "decision") throw new RouteError(400, `${b} is not a decision`);
+        if (c === "lesson")
+          return project.lessonFromDecision(
+            b,
+            typeof body.text === "string" ? { text: body.text } : {},
+          );
+        const t = await project.taskFromDecision(
+          b,
+          typeof body.title === "string" ? { title: body.title } : {},
+        );
+        if (tasks?.autoStart) void tasks.tick();
+        return t;
+      }
+      if (a === "tasks" && b && (c === "say" || c === "wrap-up" || c === "branch")) {
+        task(b);
+        const runner = needTasks();
+        const text = c === "wrap-up" ? WRAP_UP : String(body.text ?? "").trim();
+        if (c === "branch") {
+          const checkpointId = String(body.checkpointId ?? "");
+          if (!checkpointId) throw new RouteError(400, "checkpointId is required");
+          const t = await project.branchFrom(b, checkpointId);
+          const started = text ? await runner.start(t.id, { instruction: text }) : null;
+          return { task: project.getConcept(t.id), started };
+        }
+        if (!text) throw new RouteError(400, "text is required");
+        // Running: the message reaches the agent at its next step; otherwise it is the next turn.
+        if (runner.runningTasks().has(b)) return { told: await tellTask(project, b, text) };
+        return { started: await runner.start(b, { instruction: text }) };
       }
       if (a === "tasks" && b) {
         task(b);

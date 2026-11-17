@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Concept } from "../api.js";
 import { checkVerdict } from "./Checks.js";
-import { TASK_STATUS } from "./labels.js";
+import { statusOf } from "./labels.js";
 import { countsOf, layoutGoal, type MapNode } from "./map.js";
 import { isHardened } from "./Recipes.js";
 import type { GraphCtx } from "./TasksView.js";
@@ -175,7 +175,7 @@ function MapCard({
     );
   }
 
-  const st = TASK_STATUS[c.status ?? "todo"] ?? { label: c.status ?? "", tone: "mute" };
+  const st = statusOf(c);
   const gone = c.status === "abandoned" || c.status === "dropped";
   const waiting = ctx.graph.waiting?.[c.id];
   const sub = waiting && c.status === "todo" ? waiting : (c.brief ?? "").split("\n")[0];
@@ -202,6 +202,7 @@ function MapCard({
         <span className="map-row badges">
           <span className={`badge ${st.tone}`}>{st.label}</span>
           {c.role === "planner" && <span className="badge">planner</span>}
+          {c.role === "discussion" && <span className="badge discussion-badge">discussion</span>}
           {c.startFrom && (
             <span className="badge mono-badge">
               from{" "}

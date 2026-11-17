@@ -102,6 +102,7 @@ const SET_FIELDS: readonly ConceptField[] = [
   "role",
   "brief",
   "options",
+  "alternatives",
   "answer",
   "path",
   "sha256",
@@ -491,6 +492,143 @@ export class Project {
       },
       o.actor ?? this.me,
     );
+  }
+
+  /**
+   * A discussion (architecture §3.8): a task the agent and a member think through turn by
+   * turn. Without a parent, its topic becomes a new goal with the discussion under it.
+   */
+  async startDiscussion(o: {
+    parentId?: string | null;
+    topic: string;
+    message?: string;
+    actor?: Actor;
+  }): Promise<{ goal: Concept | null; discussion: Concept }> {
+    const topic = o.topic.trim();
+    if (!topic) throw new OpsError("a discussion needs a topic");
+    const actor = o.actor ?? this.me;
+    let goal: Concept | null = null;
+    let parentId = o.parentId ?? null;
+    if (!parentId) {
+      goal = await this.createConcept(
+        { kind: "goal", parentId: null, title: topic, body: "Started as a discussion." },
+        actor,
+      );
+      parentId = goal.id;
+    }
+    const discussion = await this.createConcept(
+      {
+        kind: "task",
+        parentId,
+        title: topic,
+        body: o.message?.trim() || topic,
+        role: "discussion",
+        assignee: { type: "agent" },
+      },
+      actor,
+    );
+    return { goal, discussion };
+  }
+
+  /**
+   * Continue a task from one of its checkpoints in a new sibling: for a discussion, the
+   * other answer you could have given at that turn. The conversation resumes there.
+   */
+  async branchFrom(
+    taskId: string,
+    checkpointId: string,
+    o: { title?: string; actor?: Actor } = {},
+  ): Promise<Concept> {
+    const t = this.requireConcept(taskId);
+    if (t.kind !== "task") throw new OpsError(`${taskId} is not a task`);
+    const ok = this.db
+      .listLinks({ from: taskId, rel: "evidence" })
+      .some((l) => l.to.type === "node" && l.to.id === checkpointId);
+    if (!ok) throw new OpsError("that checkpoint is not one of this task's");
+    const n = this.db
+      .listConcepts({ parentId: t.parentId ?? undefined, kind: "task" })
+      .filter((x) => x.startFrom?.taskId === taskId).length;
+    return this.createConcept(
+      {
+        kind: "task",
+        parentId: t.parentId,
+        title: o.title?.trim() || `${t.title} (branch ${n + 1})`,
+        body: t.body ?? t.title,
+        ...(t.role ? { role: t.role } : {}),
+        assignee: { type: "agent" },
+        startFrom: { taskId, checkpointId },
+        // A branch waits for the member's next message, like the turn it starts from.
+        status: t.role === "discussion" ? "need_decision" : "todo",
+      },
+      o.actor ?? this.me,
+    );
+  }
+
+  /** The discussion (or task) a decision was made in, and where its results go. */
+  private decisionHome(decisionId: string): { decision: Concept; home: Concept; scope: string } {
+    const decision = this.requireConcept(decisionId);
+    if (decision.kind !== "decision") throw new OpsError(`${decisionId} is not a decision`);
+    const home = this.requireConcept(decision.parentId as string);
+    const scope = home.kind === "task" && home.parentId ? home.parentId : home.id;
+    return { decision, home, scope };
+  }
+
+  /** Harden a decision into work: a task next to the discussion that made it. */
+  async taskFromDecision(
+    decisionId: string,
+    o: { title?: string; actor?: Actor } = {},
+  ): Promise<Concept> {
+    const { decision, home, scope } = this.decisionHome(decisionId);
+    const actor = o.actor ?? this.me;
+    const body = [
+      `Decided in "${home.title}": ${decision.body || decision.title}`,
+      decision.alternatives?.length
+        ? `Considered and not chosen:\n${decision.alternatives.map((a) => `- ${a}`).join("\n")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const t = await this.createConcept(
+      {
+        kind: "task",
+        parentId: scope,
+        title: o.title?.trim() || decision.title,
+        body,
+        assignee: { type: "agent" },
+      },
+      actor,
+    );
+    await this.link(t.id, "provenance", { type: "concept", id: decision.id }, actor);
+    return t;
+  }
+
+  /** Harden a decision into a lesson that every later task in its scope follows. */
+  async lessonFromDecision(
+    decisionId: string,
+    o: { text?: string; actor?: Actor } = {},
+  ): Promise<Concept> {
+    const { decision, scope } = this.decisionHome(decisionId);
+    const actor = o.actor ?? this.me;
+    const text =
+      o.text?.trim() ||
+      [
+        /[.!?]$/.test(decision.title) ? decision.title : `${decision.title}.`,
+        decision.alternatives?.length ? `Not: ${decision.alternatives.join("; ")}.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    const lesson = await this.createConcept(
+      {
+        kind: "lesson",
+        parentId: scope,
+        title: firstLineOf(text),
+        body: text,
+        lessonState: actor.type === "agent" ? "proposed" : "confirmed",
+      },
+      actor,
+    );
+    await this.link(lesson.id, "provenance", { type: "concept", id: decision.id }, actor);
+    return lesson;
   }
 
   /** Active checks that apply to a concept: those on it and on every ancestor (D31). */

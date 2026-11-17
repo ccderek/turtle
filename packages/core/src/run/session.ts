@@ -178,6 +178,8 @@ interface NodeParams {
   trigger: string;
   allowUnchanged: boolean;
   resumeToolUseId: string | null;
+  /** A resume point given directly (the end of the run's last turn). */
+  resumeUuid?: string | null;
   eventPayload?: Record<string, unknown>;
 }
 
@@ -229,6 +231,8 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
   private readonly toolResultsSeen = new Set<string>();
   /** tool_use id → uuid of the message that completed its group. */
   private readonly resumeUuidByTool = new Map<string, string>();
+  /** The last main-thread assistant message that ended a turn (text, no tool call). */
+  private turnEndUuid: string | null = null;
   /** Checkpoint tool calls seen in assistant messages but not yet answered: id → summary. */
   private readonly pendingCheckpointTools = new Map<string, string>();
   /** Instructions from humans not yet delivered (docs/phase2-spec.md §11). */
@@ -618,6 +622,10 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     } else if (m.type === "assistant" && m.message) {
       const apiId = String(m.message.id ?? m.uuid ?? newId());
       this.usage.add(apiId, m.message.usage, m.message.model ?? null);
+      if (main && typeof m.uuid === "string") {
+        const blocks = contentBlocks(m.message.content);
+        this.turnEndUuid = blocks.some((b) => b.type === "tool_use") ? null : m.uuid;
+      }
       for (const block of contentBlocks(m.message.content)) {
         if (block.type === "text" && main && typeof block.text === "string" && block.text.trim()) {
           this.lastAssistantText = block.text;
@@ -643,6 +651,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
         }
       }
     } else if (m.type === "user" && main && m.message && typeof m.uuid === "string") {
+      this.turnEndUuid = null;
       for (const block of contentBlocks(m.message.content)) {
         if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
           this.toolResultsSeen.add(block.tool_use_id);
@@ -1010,9 +1019,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
             trigger: p.trigger,
             sessionId: this.sessionId,
             resumeToolUseId: p.resumeToolUseId,
-            resumeMessageUuid: p.resumeToolUseId
-              ? (this.resumeUuidByTool.get(p.resumeToolUseId) ?? null)
-              : null,
+            resumeMessageUuid:
+              p.resumeUuid ??
+              (p.resumeToolUseId ? (this.resumeUuidByTool.get(p.resumeToolUseId) ?? null) : null),
             tests: this.testsNow,
             filesChanged: stat.filesChanged,
             linesAdded: stat.linesAdded,
@@ -1066,6 +1075,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     trigger: string,
     status: NodeStatus,
     resumeToolUseId: string | null,
+    resumeUuid: string | null = null,
   ): Promise<TurtleNode | null> {
     await this.runTestsIfConfigured();
     const input = await this.summaryInput(trigger);
@@ -1085,6 +1095,7 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
       trigger,
       allowUnchanged: true,
       resumeToolUseId,
+      resumeUuid,
       eventPayload: summary.usage ? { summarizer: summary.usage } : {},
     });
   }
@@ -1172,7 +1183,9 @@ export class RunSession extends EventEmitter<{ event: [RunEvent] }> {
     if (coveredByAgent) return;
     const status: NodeStatus =
       reason === "stop" ? "done" : reason === "interrupt" ? "killed" : "failed";
-    await this.autoCheckpoint(reason, status, null).catch((err) =>
+    // A clean end resumes after the last turn: a fork from here continues the conversation.
+    const resumeUuid = reason === "stop" ? this.turnEndUuid : null;
+    await this.autoCheckpoint(reason, status, null, resumeUuid).catch((err) =>
       this.log("error", `final checkpoint failed: ${errorMessage(err)}`),
     );
   }

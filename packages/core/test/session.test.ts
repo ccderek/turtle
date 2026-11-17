@@ -378,9 +378,10 @@ describe("RunSession: continue and fork", () => {
 
   it("adds earlier summaries to the prompt when no resume point exists", async () => {
     const e = await env();
+    // The run ends right after a tool call, with no closing reply: no turn end to resume at.
     const first = await run(e, async (a) => {
       await a.edit("x.txt", "x\n");
-      await a.finish("Wrote x.");
+      await a.finish();
     });
     const closing = e.db.getBranch(first.session.branchId)?.headNodeId ?? "";
     const fork = await run(e, async (a) => a.finish(), {
@@ -392,6 +393,22 @@ describe("RunSession: continue and fork", () => {
     expect(fork.agent.prompt).toMatch(
       /^Earlier work on this branch \(newest first\):\n- \[done\] .+\n\nNext$/,
     );
+  });
+
+  it("resumes a fork from a run's closing checkpoint after its last reply", async () => {
+    const e = await env();
+    const first = await run(e, async (a) => {
+      await a.edit("x.txt", "x\n");
+      await a.finish("Wrote x.");
+    });
+    const closing = e.db.getNode(e.db.getBranch(first.session.branchId)?.headNodeId ?? "");
+    expect(closing?.resumeMessageUuid).toBeTruthy();
+    const fork = await run(e, async (a) => a.finish(), {
+      from: closing?.id ?? "",
+      fork: true,
+      prompt: "Next",
+    });
+    expect(fork.agent.options.resumeSessionAt).toBe(closing?.resumeMessageUuid);
   });
 
   it("refuses to continue a running branch without --fork", async () => {

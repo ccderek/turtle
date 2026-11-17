@@ -203,6 +203,39 @@ try {
   await shot("10e-chain-replayed");
   await closePanel();
 
+  step("discuss before deciding: turns, a decision with what was not chosen, harden it");
+  await page.getByRole("button", { name: "New discussion" }).click();
+  await page.locator("#talk-topic").fill("How should we validate the strategy?");
+  await page.locator("#talk-message").fill("Walk-forward or a single split? Data is limited.");
+  await page.getByRole("button", { name: "Start the discussion" }).click();
+  await page.locator(".tasks-panel .bubble.agent").first().waitFor(long);
+  await page.locator(".tasks-panel .panel-title .badge", { hasText: "your turn" }).waitFor(long);
+  await page
+    .locator(".tasks-panel textarea[id^=say-]")
+    .fill("Let's go with walk-forward, monthly.");
+  await page.locator(".discussion-composer button[type=submit]").click();
+  await page.locator(".tasks-panel .settled-chip").waitFor(long);
+  await page.locator(".tasks-panel .decision-card .alternatives li").first().waitFor(long);
+  await page.locator(".tasks-panel .bubble.agent").nth(1).waitFor(long);
+  await page.getByRole("button", { name: "Make it a lesson" }).click();
+  await page.locator(".tasks-panel .decision-card", { hasText: "✓ lesson" }).waitFor(long);
+  await page.getByRole("button", { name: "Make it a task" }).click();
+  await page.locator(".tasks-panel .decision-card", { hasText: "✓ task" }).waitFor(long);
+  await shot("10f-discussion");
+
+  step("branch the discussion from its first turn, then wrap the original up");
+  await page.getByRole("button", { name: "Branch from here…" }).first().click();
+  await page.locator(".tasks-panel textarea[id^=branch-]").fill("What if we only have two years?");
+  await page.locator(".branch-form button[type=submit]").click();
+  await page.locator(".tasks-panel .panel-title .badge", { hasText: "your turn" }).waitFor(long);
+  await page.locator(".tasks-panel .discussion p", { hasText: "Branched from" }).waitFor(long);
+  await page.locator(".tasks-panel .bubble.agent").first().waitFor(long);
+  await shot("10g-discussion-branch");
+  await page.locator(".tasks-panel .discussion p button.link").first().click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
+  await page.locator(".tasks-panel .panel-title .badge", { hasText: "concluded" }).waitFor(long);
+  await closePanel();
+
   step("abandon a task and keep the lesson");
   await open("Compile model B");
   await page.getByRole("button", { name: "Abandon…" }).click();

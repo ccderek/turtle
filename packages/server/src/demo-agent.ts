@@ -81,6 +81,10 @@ async function graphDemo(a: FakeAgent, pause: () => Promise<unknown>): Promise<v
     }
   };
 
+  if (/— a discussion/.test(view.message)) {
+    await discussionDemo(a, title);
+    return;
+  }
   await a.say(`(demo agent, no model is called) Working on: ${title}`);
   await pause();
 
@@ -459,4 +463,47 @@ async function pathReplayDemo(
     text: "Status: done. The replay applied what it could; I redid the rest.",
   });
   await a.finish("Replay finished.");
+}
+
+/**
+ * A discussion turn (architecture §3.8): answer, record what is settled as a decision with
+ * what was not chosen, wrap up when asked. No files change.
+ */
+async function discussionDemo(a: FakeAgent, title: string): Promise<void> {
+  const said = a.prompt
+    .split("\n\n")
+    .filter((p) => !p.startsWith("[turtle]"))
+    .join("\n\n");
+  if (/wrap up this discussion/i.test(said)) {
+    await a.graph("brief", {
+      text: `Status: concluded. Discussed "${title}"; the decisions are recorded with what was not chosen.`,
+    });
+    await a.checkpoint(`Wrapped up the discussion: ${title}`, "done");
+    await a.finish("Wrapped up: the decisions, open questions and tasks are in the graph.");
+    return;
+  }
+  if (/^# Your task/m.test(said)) {
+    await a.say(
+      `(demo agent, no model is called) Let us think "${title}" through. Option A: keep it simple and learn from a first version. Option B: a more general design first. A is faster to learn from; B costs more now and less later. Which way do you lean, and what matters most?`,
+    );
+    await a.finish();
+    return;
+  }
+  const msg = said.trim();
+  if (/\b(go with|let's|lets|choose|pick|decide|use)\b|決定|就用|選/i.test(msg)) {
+    await a.graph("decision", {
+      text: msg.replace(/^(let's|lets)\s+/i, "").replace(/\.$/, ""),
+      rationale: "Agreed in the discussion",
+      alternatives: [
+        "A more general design first: more cost now than this needs",
+        "Deciding later: the next tasks depend on it",
+      ],
+    });
+    await a.say(
+      `Settled: ${msg} I recorded it as a decision, with what we did not choose. Anything else, or shall I wrap up?`,
+    );
+  } else {
+    await a.say(`Noted: "${msg}". That points to option A. Shall we go with it?`);
+  }
+  await a.finish();
 }

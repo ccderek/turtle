@@ -62,10 +62,12 @@ export interface ConceptFields {
    */
   startFresh?: boolean;
   /** A planner task splits its goal: its agent may create tasks next to itself. */
-  role?: "planner";
+  role?: "planner" | "discussion";
   /** Code branches this task's work landed on, one per source. */
   branches?: { source: string; branch: string }[];
   brief?: string;
+  // decision: the options considered and not chosen, each with why
+  alternatives?: string[];
   // question
   options?: string[];
   answer?: { text: string; by: string; at: string } | null;

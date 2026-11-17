@@ -44,6 +44,8 @@ export class TaskRunBinding implements TaskBinding {
   private briefUpdated = false;
   /** Check results of the latest checkpoint, for its reply. */
   private lastChecks: TaskCheckRun[] | null = null;
+  /** The agent declared "done" at its latest checkpoint (a discussion wrapped up). */
+  private concluded = false;
 
   constructor(
     private readonly project: Project,
@@ -99,6 +101,8 @@ export class TaskRunBinding implements TaskBinding {
   }
 
   async onCheckpoint(node: TurtleNode, ctx: { workspace: string }) {
+    // Only what the agent declared counts; the run's closing auto checkpoint does not.
+    if (node.summarySource === "agent_declared") this.concluded = node.status === "done";
     await this.project.link(this.taskId, "evidence", { type: "node", id: node.id }, this.actor);
     // Hardened acceptance conditions (D31): every active check in scope judges the work.
     if (node.status === "killed" || node.status === "failed") return;
@@ -125,11 +129,20 @@ export class TaskRunBinding implements TaskBinding {
     };
     let status: TaskStatus =
       openQuestion && outcome.reason !== "failed" ? "need_decision" : map[outcome.reason];
+    // A discussion ends each turn waiting for the human, until the agent wraps it up.
+    if (task.role === "discussion" && status === "done" && !this.concluded)
+      status = "need_decision";
     // A task cannot end done while a check in its scope fails on its last checkpoint.
     const failing = status === "done" ? failingChecks(this.project, task) : [];
     if (failing.length) status = "blocked";
     const fields: Partial<Concept> = { status };
-    if (!task.brief) {
+    if (task.role === "discussion" && !this.briefUpdated) {
+      // A discussion's card says whose turn it is and what is settled so far.
+      const settled = this.project.db
+        .listConcepts({ parentId: task.id, kind: "decision" })
+        .filter((d) => !d.dropped).length;
+      fields.brief = `${status === "done" ? "Concluded" : status === "need_decision" ? "Your turn" : status}. ${settled} decision(s) so far.`;
+    } else if (!task.brief) {
       const last = this.project.db
         .listLinks({ from: task.id, rel: "evidence" })
         .filter((l) => l.to.type === "node")
@@ -220,12 +233,16 @@ export class TaskRunBinding implements TaskBinding {
       case "decision": {
         const text = str("text");
         if (!text) throw new OpsError("text is required");
+        const alternatives = Array.isArray(args.alternatives)
+          ? (args.alternatives as unknown[]).map(String).filter((x) => x.trim())
+          : [];
         const d = await p.createConcept(
           {
             kind: "decision",
             parentId: this.taskId,
             title: firstLine(text),
             body: [text, str("rationale")].filter(Boolean).join("\n\n"),
+            ...(alternatives.length ? { alternatives } : {}),
           },
           this.actor,
         );
@@ -539,11 +556,21 @@ export async function startTaskRun(
       opts.from = nodeId;
       opts.fork = true;
     }
-    opts.prompt = replayFirst
-      ? `Replay the recipe of this task with ${Object.entries(task.replay?.params ?? {})
-          .map(([k, v]) => `${k}=${v}`)
-          .join(" ")}.`
-      : assembleTaskContext(project, task.id, o.instruction);
+    // A discussion branched from a turn resumes its conversation there: the member's
+    // message is the next turn, not a new task prompt.
+    const fromNode = opts.from ? db.getNode(opts.from) : null;
+    const resumesTalk =
+      task.role === "discussion" &&
+      !opts.newConversation &&
+      !!fromNode?.sessionId &&
+      !!fromNode.resumeMessageUuid;
+    opts.prompt = resumesTalk
+      ? o.instruction?.trim() || "Continue."
+      : replayFirst
+        ? `Replay the recipe of this task with ${Object.entries(task.replay?.params ?? {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join(" ")}.`
+        : assembleTaskContext(project, task.id, o.instruction);
     if (replayFirst) opts.model = task.replay?.source ? "replay" : "recipe";
   }
 

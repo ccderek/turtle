@@ -12,7 +12,8 @@ import {
 import { ago } from "../format.js";
 import { AgentSettingsDialog, modelName } from "./Agents.js";
 import { ConceptPanel } from "./ConceptPanel.js";
-import { KIND_LABEL, TASK_STATUS } from "./labels.js";
+import { NewDiscussionDialog } from "./Discussion.js";
+import { KIND_LABEL, statusOf, TASK_STATUS } from "./labels.js";
 import { MapView } from "./MapView.js";
 import { GateDialog } from "./Share.js";
 import { buildRows, childrenMap, evidenceCount, progress } from "./tree.js";
@@ -93,6 +94,7 @@ export function TasksView({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [showDropped, setShowDropped] = useState(false);
   const [newGoal, setNewGoal] = useState(false);
+  const [newTalk, setNewTalk] = useState(false);
   const [gate, setGate] = useState(false);
   const [seenAt, setSeenAt] = useState<string>(() => readSeen());
   const inflight = useRef(false);
@@ -270,6 +272,9 @@ export function TasksView({
           <button type="button" className="primary" onClick={() => setNewGoal(true)}>
             New goal
           </button>
+          <button type="button" onClick={() => setNewTalk(true)}>
+            New discussion
+          </button>
           <label
             className="toggle"
             title="Start tasks whose dependencies are done, up to the parallel cap"
@@ -387,6 +392,7 @@ export function TasksView({
         </aside>
       )}
       {newGoal && <NewGoalDialog ctx={ctx} onClose={() => setNewGoal(false)} />}
+      {newTalk && <NewDiscussionDialog ctx={ctx} onClose={() => setNewTalk(false)} />}
       {gate && <GateDialog ctx={ctx} onClose={() => setGate(false)} />}
       {agents && <AgentSettingsDialog ctx={ctx} onClose={() => setAgents(false)} />}
     </div>
@@ -416,7 +422,7 @@ function OutlineRow({
     // biome-ignore lint/suspicious/noArrayIndexKey: guides are positional.
     <span key={i} className={`guide${i === depth - 1 ? " elbow" : ""}`} aria-hidden="true" />
   ));
-  const st = TASK_STATUS[c.status ?? "todo"] ?? { label: c.status ?? "", tone: "mute" };
+  const st = statusOf(c);
   const waiting = ctx.graph.waiting?.[c.id];
   if (c.kind === "task") {
     const gone = c.status === "abandoned" || c.status === "dropped";

@@ -61,10 +61,23 @@ function decisionLines(p: Project, task: Concept): string[] {
   const out: string[] = [];
   for (const a of [task, ...ancestors(p, task)]) {
     for (const d of p.db.listConcepts({ parentId: a.id, kind: "decision" }))
-      out.push(`- ${clip(d.title, 200)}`);
+      out.push(
+        `- ${clip(d.title, 200)}${d.alternatives?.length ? ` (considered and not chosen: ${d.alternatives.map((x) => clip(x, 120)).join("; ")})` : ""}`,
+      );
   }
   return out;
 }
+
+/** How an agent takes part in a discussion task (architecture §3.8). */
+export const DISCUSSION = `## This is a discussion
+The human wants to think this through with you, one turn at a time. The text above is their first message. Answer it, ask what you need to know, and lay out options with their trade-offs; then end your turn. The human replies, and you continue from there.
+- Do not change files unless the human asks you to. Reading code, data or results to ground the discussion is fine.
+- When something is settled, record it with mcp__turtle__decision, listing in "alternatives" the options you considered and did not choose, each with why. Ask what only the human can decide with mcp__turtle__question. Work that should be done becomes a task (mcp__turtle__task, op "create").
+- Do not checkpoint "done" on your own. When the human asks you to wrap up, record the decisions, open questions and tasks that are still missing, write the brief, and checkpoint "done".`;
+
+/** What the member's "Wrap up" sends to a discussion's agent. */
+export const WRAP_UP =
+  'Please wrap up this discussion: record the decisions that are settled (with the alternatives you considered and why not), the questions still open and the tasks to do, write the brief, and checkpoint "done".';
 
 /**
  * The prompt for a task's new or forked run (docs/phase2-spec.md §7.2): compact, and
@@ -79,6 +92,7 @@ export function assembleTaskContext(p: Project, taskId: string, instruction?: st
   const goal = chain.find((c) => c.kind === "goal");
   const parts: string[] = [`# Your task: ${task.title}`];
   if (task.body) parts.push(task.body.trim());
+  if (task.role === "discussion") parts.push(DISCUSSION);
   const replay = replayContext(p, task) ?? pathReplayContext(p, task);
   if (replay) parts.push(replay);
   if (goal) parts.push(`## Goal\n${goal.title}${goal.body ? `\n${clip(goal.body, 800)}` : ""}`);
@@ -118,7 +132,9 @@ export function graphText(p: Project, taskId: string, scope: "task" | "goal" = "
   const goal = chain.find((c) => c.kind === "goal");
   const out: string[] = [];
   if (goal) out.push(`Goal: ${goal.title}`);
-  out.push(`Your task: ${line(task)}`);
+  out.push(
+    `Your task: ${line(task)}${task.role === "discussion" ? " — a discussion: answer the human, then end your turn" : ""}`,
+  );
   const lessons = lessonLines(p, task, short);
   if (lessons.length) out.push("Lessons you must follow:", ...lessons);
   const decisions = decisionLines(p, task);
